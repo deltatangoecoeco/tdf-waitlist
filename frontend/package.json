@@ -38,6 +38,8 @@
     "webpack-sources": "^3.2.3"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^5.17.0",
+    "@testing-library/react": "^13.4.0",
     "compression-webpack-plugin": "^10.0.0",
     "customize-cra": "^1.0.0",
     "eslint": "^8.24.0",
