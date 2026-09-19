@@ -148,6 +148,109 @@ async function registerFleet({ fleetInfo, categoryMatches, authContext }) {
   });
 }
 
+// A player flying this many characters or more is worth asking to drop one.
+const MULTIBOX_THRESHOLD = 2;
+
+// Groups the characters currently in fleet by the player who owns them, so an FC
+// can see who is flying several at once. Characters that have never authenticated
+// with the site have no account_id and cannot be attributed, so each becomes its
+// own row rather than being merged into a single phantom player.
+// Returns structured data only - formatting is left to the component.
+function groupCharactersByPlayer(members) {
+  const byPlayer = {};
+  const unlinkedRows = [];
+
+  members.forEach((member) => {
+    const name = member.name || "Unknown";
+    const character = { name, ship: member.ship.name };
+
+    if (member.account_id === null || member.account_id === undefined) {
+      unlinkedRows.push({
+        key: "unlinked-" + member.id,
+        player: name,
+        unlinked: true,
+        count: 1,
+        characters: [character],
+      });
+      return;
+    }
+
+    if (!byPlayer[member.account_id]) {
+      byPlayer[member.account_id] = {
+        // account_name is resolved separately from account_id and can be missing;
+        // fall back to a character name so the row still identifies someone
+        player: member.account_name || name,
+        count: 0,
+        characters: [],
+      };
+    }
+    byPlayer[member.account_id].count++;
+    byPlayer[member.account_id].characters.push(character);
+  });
+
+  const playerRows = entries(byPlayer).map(([accountId, data]) => ({
+    key: "account-" + accountId,
+    player: data.player,
+    unlinked: false,
+    count: data.count,
+    characters: data.characters,
+  }));
+
+  return {
+    // most characters first, then by name so equal counts stay in a stable order
+    rows: sortBy(playerRows.concat(unlinkedRows), [(row) => -row.count, "player"]),
+    characterCount: members.length,
+    pilotCount: playerRows.length,
+    multiboxingCount: playerRows.filter((row) => row.count >= MULTIBOX_THRESHOLD).length,
+    unlinkedCount: unlinkedRows.length,
+  };
+}
+
+// Memoised on `members`, which only changes identity when the fleet is refetched.
+// The parent re-renders on unrelated state (modal toggles, the refresh button), so
+// this skips both the render and the reconciliation of every row in between.
+const CharactersPerPlayer = React.memo(function CharactersPerPlayer({ members }) {
+  const { rows, characterCount, pilotCount, multiboxingCount, unlinkedCount } =
+    groupCharactersByPlayer(members);
+
+  return (
+    <>
+      <br />
+      <Title>Characters per player</Title>
+      <InputGroup>
+        <BorderedBox>Pilots: {pilotCount} </BorderedBox>
+        <BorderedBox>Characters: {characterCount} </BorderedBox>
+        <BorderedBox>Multiboxing: {multiboxingCount} </BorderedBox>
+        {unlinkedCount > 0 && <BorderedBox>Unlinked: {unlinkedCount} </BorderedBox>}
+      </InputGroup>
+      <Table fullWidth aria-label="Characters per player">
+        <TableHead>
+          <Row>
+            <CellHead>Player</CellHead>
+            <CellHead>In fleet</CellHead>
+            <CellHead>Characters</CellHead>
+          </Row>
+        </TableHead>
+        <TableBody>
+          {rows.map((row) => (
+            <Row key={row.key}>
+              <Cell>{row.unlinked ? `${row.player} (unlinked)` : row.player}</Cell>
+              <Cell>
+                {row.count >= MULTIBOX_THRESHOLD ? <strong>{row.count}</strong> : row.count}
+              </Cell>
+              <Cell>
+                {row.characters
+                  .map((character) => `${character.name} (${character.ship})`)
+                  .join(", ")}
+              </Cell>
+            </Row>
+          ))}
+        </TableBody>
+      </Table>
+    </>
+  );
+});
+
 function FleetMembers({refreshedAt}) {
   const authContext = React.useContext(AuthContext);
   const [fleetMembers, setFleetMembers] = React.useState(null);
@@ -190,7 +293,7 @@ function FleetMembers({refreshedAt}) {
         <BorderedBox>Vindicators: {cats["Vindicator"]} </BorderedBox>
         <BorderedBox>Megathron/Nightmare: {cats["Mega/Night"]} </BorderedBox>
       </InputGroup>
-      <Table>
+      <Table aria-label="Fleet composition">
         <TableHead>
           <Row>
             <CellHead>Ship</CellHead>
@@ -208,7 +311,7 @@ function FleetMembers({refreshedAt}) {
       </Table>
       <br />
       <Title>Members</Title>
-      <Table fullWidth>
+      <Table fullWidth aria-label="Members">
         <TableHead>
           <Row>
             <CellHead>Name</CellHead>
@@ -232,6 +335,8 @@ function FleetMembers({refreshedAt}) {
             ))}
         </TableBody>
       </Table>
+
+      <CharactersPerPlayer members={fleetMembers.members} />
     </>
   );
 }
