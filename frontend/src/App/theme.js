@@ -25,7 +25,7 @@ const theme = {
       input: {
         color: "#2020200d",
         text: "#4a4a4a",
-        accent: "2020200d",
+        accent: "#2020200d",
         disabled: "#cccccc",
       },
       success: {
