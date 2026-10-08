@@ -17,6 +17,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faColumns } from "@fortawesome/free-solid-svg-icons";
 import { useQuery } from "../../Util/query";
 import { useTranslation } from "react-i18next";
+import { UnregisteredFleetBanner } from "../../Components/UnregisteredFleetBanner";
 
 function coalesceCalls(func, wait) {
   var nextCall = null;
@@ -174,6 +175,8 @@ export function Waitlist() {
   if (!waitlistData.open) {
     return (
       <>
+        {/* An FC forming a new fleet usually registers it before opening the waitlist */}
+        <UnregisteredFleetBanner />
         {/* <InfoAnnouncement id={2} /> */}
         <em>{t("notopen")}</em>
       </>
@@ -195,6 +198,7 @@ export function Waitlist() {
 
   return (
     <>
+      <UnregisteredFleetBanner />
       {/* <InfoAnnouncement id={2} /> */}
       <Buttons>
         <InputGroup>

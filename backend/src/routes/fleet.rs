@@ -81,6 +81,52 @@ async fn get_current_fleet_id(
 }
 
 #[derive(Debug, Serialize)]
+struct MyFleetResponse {
+    fleet_id: i64,
+    is_boss: bool,
+}
+
+#[get("/api/fleet/me?<character_id>")]
+async fn my_fleet(
+    app: &rocket::State<Application>,
+    account: AuthenticatedAccount,
+    character_id: i64,
+) -> Result<Json<MyFleetResponse>, Madness> {
+    account.require_access("fleet-configure")?;
+    authorize_character(app.get_db(), &account, character_id, None).await?;
+
+    #[derive(Debug, Deserialize)]
+    struct BasicInfo {
+        fleet_id: i64,
+        // The current ESI spec makes fleet_boss_id required, but it is optional here so an
+        // older response shape can't make this route fail: unknown means "not boss".
+        #[serde(default)]
+        fleet_boss_id: Option<i64>,
+    }
+
+    let basic_info = app
+        .esi_client
+        .get(
+            &format!("/v1/characters/{}/fleet", character_id),
+            character_id,
+            Some(ESIScope::Fleets_ReadFleet_v1),
+        )
+        .await;
+    if let Err(whatswrong) = basic_info {
+        match whatswrong {
+            ESIError::Status(404) => return Err(Madness::NotFound("You are not in a fleet")),
+            e => return Err(e.into()),
+        };
+    }
+    let basic_info: BasicInfo = basic_info.unwrap();
+
+    Ok(Json(MyFleetResponse {
+        fleet_id: basic_info.fleet_id,
+        is_boss: basic_info.fleet_boss_id == Some(character_id),
+    }))
+}
+
+#[derive(Debug, Serialize)]
 struct FleetInfoResponse {
     fleet_id: i64,
     wings: Vec<FleetInfoWing>,
@@ -319,6 +365,7 @@ pub fn routes() -> Vec<rocket::Route> {
         fleet_info,
         close_fleet,
         fleet_members,
-        register_fleet
+        register_fleet,
+        my_fleet
     ]
 }

@@ -4,6 +4,7 @@ import { Confirm } from "../../Components/Modal";
 import { Button, Buttons, InputGroup, NavButton, Select } from "../../Components/Form";
 import { Content, Title } from "../../Components/Page";
 import { apiCall, errorToaster, toaster, useApi } from "../../api";
+import { UnregisteredFleetBanner } from "../../Components/UnregisteredFleetBanner";
 import { Cell, CellHead, Row, Table, TableBody, TableHead } from "../../Components/Table";
 import { BorderedBox } from "../../Components/NoteBox";
 import { sortBy, entries } from "lodash";
@@ -69,6 +70,7 @@ export function Fleet() {
 
   return (
     <>
+      <UnregisteredFleetBanner />
       <Buttons>
         <NavButton to="/fc/fleet/register">{t("load_fleet")}</NavButton>
         {/* <NavButton to="/auth/start/fc">ESI re-auth as FC</NavButton> */}
