@@ -18,6 +18,7 @@ import { faColumns } from "@fortawesome/free-solid-svg-icons";
 import { useQuery } from "../../Util/query";
 import { useTranslation } from "react-i18next";
 import { UnregisteredFleetBanner } from "../../Components/UnregisteredFleetBanner";
+import { isRegisteredBoss } from "../../Util/fleet";
 
 function coalesceCalls(func, wait) {
   var nextCall = null;
@@ -99,7 +100,7 @@ function useFleetComposition() {
       if (
         !fleets ||
         fleets.fleets.length === 0 ||
-        !fleets.fleets.some((n) => authContext.current.id === n.boss.id)
+        !isRegisteredBoss(fleets.fleets, authContext.current.id)
       ) {
         setFleetMembers(null);
         return;

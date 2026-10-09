@@ -5,6 +5,8 @@ import styled from "styled-components";
 import { NavButton } from "./Form";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faTriangleExclamation } from "@fortawesome/free-solid-svg-icons";
+import { useTranslation } from "react-i18next";
+import { isRegisteredBoss } from "../Util/fleet";
 
 const CHECK_INTERVAL_MS = 15000;
 
@@ -42,6 +44,7 @@ const RegisterButton = styled(NavButton)`
 // drops the registration, and until someone re-registers invites and removals do nothing.
 export function UnregisteredFleetBanner() {
   const authContext = React.useContext(AuthContext);
+  const { t } = useTranslation("fleet");
   const [unregistered, setUnregistered] = React.useState(false);
   const canConfigure = !!(
     authContext &&
@@ -66,9 +69,7 @@ export function UnregisteredFleetBanner() {
           const status = await apiCall("/api/fleet/status", {});
           // Match the boss as well as the fleet id: right after a handover the old
           // registration still exists for a few seconds, under the previous FC.
-          result = !status.fleets.some(
-            (fleet) => fleet.id === me.fleet_id && fleet.boss.id === characterId
-          );
+          result = !isRegisteredBoss(status.fleets, characterId, me.fleet_id);
         }
       } catch (err) {
         // Not in a fleet (404) or anything else going wrong: stay hidden
@@ -98,12 +99,11 @@ export function UnregisteredFleetBanner() {
     <Banner role="status">
       <FontAwesomeIcon icon={faTriangleExclamation} style={{ marginTop: "0.2em" }} />
       <div>
-        <strong>You&apos;re the boss of a fleet the waitlist doesn&apos;t know about.</strong>
+        <strong>{t("unregistered_title")}</strong>
         <br />
-        Until it&apos;s registered, invites won&apos;t work and pilots who join won&apos;t drop off
-        the waitlist.
+        {t("unregistered_text")}
         <div style={{ marginTop: "0.5em" }}>
-          <RegisterButton to="/fc/fleet/register">Register this fleet</RegisterButton>
+          <RegisterButton to="/fc/fleet/register">{t("unregistered_button")}</RegisterButton>
         </div>
       </div>
     </Banner>

@@ -5,6 +5,7 @@ import { Button, Buttons, InputGroup, NavButton, Select } from "../../Components
 import { Content, Title } from "../../Components/Page";
 import { apiCall, errorToaster, toaster, useApi } from "../../api";
 import { UnregisteredFleetBanner } from "../../Components/UnregisteredFleetBanner";
+import { isRegisteredBoss } from "../../Util/fleet";
 import { Cell, CellHead, Row, Table, TableBody, TableHead } from "../../Components/Table";
 import { BorderedBox } from "../../Components/NoteBox";
 import { sortBy, entries } from "lodash";
@@ -83,7 +84,7 @@ export function Fleet() {
           </Button>
         </InputGroup>
         <Button onClick={() => setEmptyWaitlistModalOpen(true)}>{t("clear_waitlist")}</Button>
-        {fleets && fleets.fleets.length > 0 && fleets.fleets.some(n => authContext.current.id === n.boss.id) && 
+        {fleets && fleets.fleets.length > 0 && isRegisteredBoss(fleets.fleets, authContext.current.id) && 
         <Button variant="danger" onClick={() => setFleetCloseModalOpen(true)}>
           {t("kick_everyone")}
           </Button>}
@@ -113,7 +114,7 @@ export function Fleet() {
         </Buttons>
       )}
 
-      {fleets && fleets.fleets.length > 0 && fleets.fleets.some(n => authContext.current.id === n.boss.id) && <FleetMembers refreshedAt={refreshedAt} />}
+      {fleets && fleets.fleets.length > 0 && isRegisteredBoss(fleets.fleets, authContext.current.id) && <FleetMembers refreshedAt={refreshedAt} />}
       <Confirm
         open={fleetCloseModalOpen}
         setOpen={setFleetCloseModalOpen}
