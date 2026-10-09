@@ -1,11 +1,11 @@
 import React from "react";
 import { AuthContext, ToastContext, WaitlistContext } from "../../contexts";
+import { UnregisteredFleetBanner } from "../../Components/UnregisteredFleetBanner";
+import { isRegisteredBoss } from "../../Util/fleet";
 import { Confirm } from "../../Components/Modal";
 import { Button, Buttons, InputGroup, NavButton, Select } from "../../Components/Form";
 import { Content, Title } from "../../Components/Page";
 import { apiCall, errorToaster, toaster, useApi } from "../../api";
-import { UnregisteredFleetBanner } from "../../Components/UnregisteredFleetBanner";
-import { isRegisteredBoss } from "../../Util/fleet";
 import { Cell, CellHead, Row, Table, TableBody, TableHead } from "../../Components/Table";
 import { BorderedBox } from "../../Components/NoteBox";
 import { sortBy, entries } from "lodash";
