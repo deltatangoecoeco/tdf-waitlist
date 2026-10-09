@@ -2,14 +2,14 @@ import React from "react";
 import { AuthContext, ToastContext, WaitlistContext } from "../../contexts";
 import { Confirm } from "../../Components/Modal";
 import { Button, Buttons, InputGroup, NavButton, Select } from "../../Components/Form";
-import { Content, Title } from "../../Components/Page";
+import { Content } from "../../Components/Page";
 import { apiCall, errorToaster, toaster, useApi } from "../../api";
-import { Cell, CellHead, Row, Table, TableBody, TableHead } from "../../Components/Table";
-import { BorderedBox } from "../../Components/NoteBox";
 import { sortBy, entries } from "lodash";
 import { useNavigate, useLocation } from "react-router";
+import { Link } from "react-router-dom";
+import styled from "styled-components";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faRotate } from "@fortawesome/free-solid-svg-icons";
+import { faGraduationCap, faRotate } from "@fortawesome/free-solid-svg-icons";
 import { useTranslation } from "react-i18next";
 
 const marauders = ["Paladin", "Kronos"];
@@ -150,6 +150,8 @@ async function registerFleet({ fleetInfo, categoryMatches, authContext }) {
 
 // A player flying this many characters or more is worth asking to drop one.
 const MULTIBOX_THRESHOLD = 2;
+// From this many characters a player gets a warning-coloured count pill.
+const HEAVY_MULTIBOX_THRESHOLD = 3;
 
 // Groups the characters currently in fleet by the player who owns them, so an FC
 // can see who is flying several at once. Characters that have never authenticated
@@ -162,7 +164,7 @@ function groupCharactersByPlayer(members) {
 
   members.forEach((member) => {
     const name = member.name || "Unknown";
-    const character = { name, ship: member.ship.name };
+    const character = { id: member.id, name, ship: member.ship.name };
 
     if (member.account_id === null || member.account_id === undefined) {
       unlinkedRows.push({
@@ -206,48 +208,244 @@ function groupCharactersByPlayer(members) {
   };
 }
 
-// Memoised on `members`, which only changes identity when the fleet is refetched.
+const Chips = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 0.5em;
+`;
+
+const Summary = styled.div`
+  color: ${(props) => props.theme.colors.accent4};
+  font-size: 0.85em;
+  margin-bottom: 0.6em;
+`;
+
+const SectionLabel = styled.div`
+  color: ${(props) => props.theme.colors.accent4};
+  font-size: 0.85em;
+  font-weight: 600;
+  margin: 0.8em 0 0.4em;
+`;
+
+const CardGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  align-items: start;
+`;
+
+// Modelled on the x-up card (XCardDOM in Pages/Waitlist/XCard.js)
+const PlayerCard = styled.div`
+  border: solid 2px ${(props) => props.theme.colors.secondary.color};
+  background-color: ${(props) => props.theme.colors.secondary.color};
+  color: ${(props) => props.theme.colors.secondary.text};
+  border-radius: 5px;
+  font-size: 0.9em;
+  filter: drop-shadow(0px 4px 5px ${(props) => props.theme.colors.shadow});
+`;
+
+const CardHead = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.3em 0.3em 0.35em 0.6em;
+`;
+
+const PlayerName = styled.span`
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  word-break: break-word;
+`;
+
+const Pill = styled.span`
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  background-color: ${(props) => props.theme.colors.background};
+  color: ${(props) => (props.muted ? props.theme.colors.accent4 : props.theme.colors.text)};
+  border: 1px solid ${(props) => props.theme.colors.accent2};
+  ${(props) =>
+    props.heavy &&
+    `
+    background-color: ${props.theme.colors.warning.color};
+    color: ${props.theme.colors.warning.text};
+    border-color: ${props.theme.colors.warning.color};
+  `}
+`;
+
+const CardBody = styled.div`
+  background-color: ${(props) => props.theme.colors.background};
+  color: ${(props) => props.theme.colors.text};
+  border-radius: 0 0 3px 3px;
+`;
+
+const CharacterLine = styled.div`
+  display: grid;
+  grid-template-columns: 82px 1fr auto;
+  gap: 8px;
+  padding: 5px 10px;
+  align-items: center;
+  & + & {
+    border-top: 1px solid ${(props) => props.theme.colors.accent1};
+  }
+`;
+
+const MutedText = styled.span`
+  color: ${(props) => props.theme.colors.accent4};
+`;
+
+// The character's name links to their pilot page; it only underlines on hover so the
+// lists stay readable
+const PilotLink = styled(Link)`
+  color: inherit;
+  text-decoration: none;
+  &:hover {
+    text-decoration: underline;
+  }
+`;
+
+const IconLink = styled(Link)`
+  color: ${(props) => props.theme.colors.accent4};
+  text-decoration: none;
+  &:hover {
+    color: ${(props) => props.theme.colors.text};
+  }
+`;
+
+const ElseList = styled.div`
+  margin-top: 10px;
+  font-size: 0.9em;
+  background-color: ${(props) => props.theme.colors.background};
+  color: ${(props) => props.theme.colors.text};
+  border: 1px solid ${(props) => props.theme.colors.accent2};
+  border-radius: 5px;
+`;
+
+// Fixed name and ship columns so ships line up down the list, as they do in the cards
+const ElseLine = styled.div`
+  display: grid;
+  grid-template-columns: minmax(0, 14em) minmax(0, 11em) 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  & + & {
+    border-top: 1px solid ${(props) => props.theme.colors.accent1};
+  }
+`;
+
+function SkillsLink({ id }) {
+  return (
+    <IconLink to={"/skills?character_id=" + id} title="Skills" aria-label="Skills">
+      <FontAwesomeIcon icon={faGraduationCap} />
+    </IconLink>
+  );
+}
+
+function CompositionStrip({ cats, grouping }) {
+  const { characterCount, pilotCount, unlinkedCount } = grouping;
+  return (
+    <>
+      <Chips>
+        <Pill>
+          <b>{cats["Marauder"]}</b> Marauders
+        </Pill>
+        <Pill>
+          <b>{cats["Logi"]}</b> Logistics
+        </Pill>
+        <Pill>
+          <b>{cats["Vindicator"]}</b> Vindicators
+        </Pill>
+        <Pill>
+          <b>{cats["Mega/Night"]}</b> Megathron/Nightmare
+        </Pill>
+      </Chips>
+      <Summary>
+        {characterCount} characters · {pilotCount} pilots
+        {unlinkedCount > 0 && ` · ${unlinkedCount} unlinked`}
+      </Summary>
+    </>
+  );
+}
+
+// Memoised on `grouping`, which only changes identity when the fleet is refetched.
 // The parent re-renders on unrelated state (modal toggles, the refresh button), so
 // this skips both the render and the reconciliation of every row in between.
-const CharactersPerPlayer = React.memo(function CharactersPerPlayer({ members }) {
-  const { rows, characterCount, pilotCount, multiboxingCount, unlinkedCount } =
-    groupCharactersByPlayer(members);
+const MultiboxerCards = React.memo(function MultiboxerCards({ grouping }) {
+  const rows = grouping.rows.filter((row) => row.count >= MULTIBOX_THRESHOLD);
 
   return (
     <>
-      <br />
-      <Title>Characters per player</Title>
-      <InputGroup>
-        <BorderedBox>Pilots: {pilotCount} </BorderedBox>
-        <BorderedBox>Characters: {characterCount} </BorderedBox>
-        <BorderedBox>Multiboxing: {multiboxingCount} </BorderedBox>
-        {unlinkedCount > 0 && <BorderedBox>Unlinked: {unlinkedCount} </BorderedBox>}
-      </InputGroup>
-      <Table fullWidth aria-label="Characters per player">
-        <TableHead>
-          <Row>
-            <CellHead>Player</CellHead>
-            <CellHead>In fleet</CellHead>
-            <CellHead>Characters</CellHead>
-          </Row>
-        </TableHead>
-        <TableBody>
+      <SectionLabel>Multiboxers ({grouping.multiboxingCount})</SectionLabel>
+      {rows.length > 0 ? (
+        <CardGrid role="list" aria-label="Multiboxers">
           {rows.map((row) => (
-            <Row key={row.key}>
-              <Cell>{row.unlinked ? `${row.player} (unlinked)` : row.player}</Cell>
-              <Cell>
-                {row.count >= MULTIBOX_THRESHOLD ? <strong>{row.count}</strong> : row.count}
-              </Cell>
-              <Cell>
-                {row.characters
-                  .map((character) => `${character.name} (${character.ship})`)
-                  .join(", ")}
-              </Cell>
-            </Row>
+            <PlayerCard role="listitem" key={row.key}>
+              <CardHead>
+                <PlayerName>{row.player}</PlayerName>
+                <Pill heavy={row.count >= HEAVY_MULTIBOX_THRESHOLD}>
+                  <b>{row.count}</b> characters
+                </Pill>
+              </CardHead>
+              <CardBody>
+                {row.characters.map((character) => (
+                  <CharacterLine key={character.id}>
+                    <strong>{character.ship}</strong>
+                    <PilotLink to={"/pilot?character_id=" + character.id}>
+                      {character.name === row.player ? (
+                        <MutedText>
+                          <em>main</em>
+                        </MutedText>
+                      ) : (
+                        character.name
+                      )}
+                    </PilotLink>
+                    <SkillsLink id={character.id} />
+                  </CharacterLine>
+                ))}
+              </CardBody>
+            </PlayerCard>
           ))}
-        </TableBody>
-      </Table>
+        </CardGrid>
+      ) : (
+        <p>Nobody is flying more than one character.</p>
+      )}
     </>
+  );
+});
+
+// Single-character players and unlinked characters: collapsed by default, and a compact list
+// rather than cards because there is nothing to compare between them.
+const EveryoneElse = React.memo(function EveryoneElse({ grouping }) {
+  const [showAll, setShowAll] = React.useState(false);
+  const rows = grouping.rows.filter((row) => row.count < MULTIBOX_THRESHOLD);
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <div style={{ marginTop: "14px" }}>
+      <Button onClick={() => setShowAll(!showAll)}>
+        {showAll ? "Hide pilots on one character" : `+${rows.length} pilots on one character`}
+      </Button>
+      {showAll && (
+        <ElseList role="list" aria-label="Everyone else">
+          {rows.map((row) =>
+            row.characters.map((character) => (
+              <ElseLine role="listitem" key={character.id}>
+                <PilotLink to={"/pilot?character_id=" + character.id}>{character.name}</PilotLink>
+                <strong>{character.ship}</strong>
+                <span>{row.unlinked && <Pill muted>unlinked</Pill>}</span>
+                <SkillsLink id={character.id} />
+              </ElseLine>
+            ))
+          )}
+        </ElseList>
+      )}
+    </div>
   );
 });
 
@@ -262,6 +460,12 @@ function FleetMembers({refreshedAt}) {
       .catch((err) => setFleetMembers(null)); // What's error handling?
   }, [characterId, refreshedAt]);
 
+  const members = fleetMembers ? fleetMembers.members : null;
+  const grouping = React.useMemo(
+    () => (members ? groupCharactersByPlayer(members) : null),
+    [members]
+  );
+
   if (!fleetMembers) {
     return null;
   }
@@ -272,71 +476,18 @@ function FleetMembers({refreshedAt}) {
     "Mega/Night": 0,
   };
 
-  var summary = {};
-  if (fleetMembers) {
-    fleetMembers.members.forEach((member) => {
-      if (!summary[member.ship.name]) summary[member.ship.name] = 0;
-      summary[member.ship.name]++;
-      if (marauders.includes(member.ship.name)) cats["Marauder"]++;
-      if (logi.includes(member.ship.name)) cats["Logi"]++;
-      if ("Vindicator" === member.ship.name) cats["Vindicator"]++;
-      if (bad.includes(member.ship.name)) cats["Mega/Night"]++;
-    });
-  }
+  members.forEach((member) => {
+    if (marauders.includes(member.ship.name)) cats["Marauder"]++;
+    if (logi.includes(member.ship.name)) cats["Logi"]++;
+    if ("Vindicator" === member.ship.name) cats["Vindicator"]++;
+    if (bad.includes(member.ship.name)) cats["Mega/Night"]++;
+  });
   return (
     <>
       <br />
-      <Title>Fleet composition</Title>
-      <InputGroup>
-        <BorderedBox>Marauders: {cats["Marauder"]} </BorderedBox>
-        <BorderedBox>Logistics: {cats["Logi"]} </BorderedBox>
-        <BorderedBox>Vindicators: {cats["Vindicator"]} </BorderedBox>
-        <BorderedBox>Megathron/Nightmare: {cats["Mega/Night"]} </BorderedBox>
-      </InputGroup>
-      <Table aria-label="Fleet composition">
-        <TableHead>
-          <Row>
-            <CellHead>Ship</CellHead>
-            <CellHead>#</CellHead>
-          </Row>
-        </TableHead>
-        <TableBody>
-          {sortBy(entries(summary), [1]).map(([shipName, count]) => (
-            <Row key={shipName}>
-              <Cell>{shipName}</Cell>
-              <Cell>{count}</Cell>
-            </Row>
-          ))}
-        </TableBody>
-      </Table>
-      <br />
-      <Title>Members</Title>
-      <Table fullWidth aria-label="Members">
-        <TableHead>
-          <Row>
-            <CellHead>Name</CellHead>
-            <CellHead>Ship</CellHead>
-            <CellHead>Account</CellHead>
-            <CellHead>Actions</CellHead>
-          </Row>
-        </TableHead>
-        <TableBody>
-          {fleetMembers &&
-            fleetMembers.members.map((member) => (
-              <Row key={member.id}>
-                <Cell>{member.name}</Cell>
-                <Cell>{member.ship.name}</Cell>
-                <Cell>{member.account_name}</Cell>
-                <Cell>
-                  <NavButton to={"/skills?character_id=" + member.id}>Skills</NavButton>
-                  <NavButton to={"/pilot?character_id=" + member.id}>Information</NavButton>
-                </Cell>
-              </Row>
-            ))}
-        </TableBody>
-      </Table>
-
-      <CharactersPerPlayer members={fleetMembers.members} />
+      <CompositionStrip cats={cats} grouping={grouping} />
+      <MultiboxerCards grouping={grouping} />
+      <EveryoneElse grouping={grouping} />
     </>
   );
 }
