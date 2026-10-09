@@ -142,6 +142,7 @@ struct FleetMembersMember {
     account_name: Option<String>,
     ship: Hull,
     wl_category: Option<String>,
+    joined_at: Option<i64>,
 }
 
 #[get("/api/fleet/members?<character_id>")]
@@ -227,6 +228,11 @@ async fn fleet_members(
                         .get(&member.squad_id)
                         .and_then(|s| category_lookup.get(s.as_str()))
                         .map(|s| s.to_string()),
+                    joined_at: member
+                        .join_time
+                        .as_deref()
+                        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                        .map(|t| t.timestamp()),
                 }
             })
             .collect(),

@@ -153,6 +153,18 @@ const MULTIBOX_THRESHOLD = 2;
 // From this many characters a player gets a warning-coloured count pill.
 const HEAVY_MULTIBOX_THRESHOLD = 3;
 
+// Time since `since` (unix seconds, may be null) as e.g. "3h 09m", "23m" or "<1m". Whole
+// minutes only: the clock ticks once a minute, so seconds would just be stale noise.
+function formatTimeInFleet(now, since) {
+  if (typeof since !== "number") return "-";
+  const totalMinutes = Math.floor((now - since) / 60);
+  if (totalMinutes < 1) return "<1m";
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+}
+
 // Groups the characters currently in fleet by the player who owns them, so an FC
 // can see who is flying several at once. Characters that have never authenticated
 // with the site have no account_id and cannot be attributed, so each becomes its
@@ -164,7 +176,9 @@ function groupCharactersByPlayer(members) {
 
   members.forEach((member) => {
     const name = member.name || "Unknown";
-    const character = { id: member.id, name, ship: member.ship.name };
+    // joined_at is null when ESI did not report a join time
+    const joinedAt = typeof member.joined_at === "number" ? member.joined_at : null;
+    const character = { id: member.id, name, ship: member.ship.name, joinedAt };
 
     if (member.account_id === null || member.account_id === undefined) {
       unlinkedRows.push({
@@ -172,6 +186,7 @@ function groupCharactersByPlayer(members) {
         player: name,
         unlinked: true,
         count: 1,
+        multiboxingSince: null,
         characters: [character],
       });
       return;
@@ -190,17 +205,34 @@ function groupCharactersByPlayer(members) {
     byPlayer[member.account_id].characters.push(character);
   });
 
-  const playerRows = entries(byPlayer).map(([accountId, data]) => ({
-    key: "account-" + accountId,
-    player: data.player,
-    unlinked: false,
-    count: data.count,
-    characters: data.characters,
-  }));
+  const playerRows = entries(byPlayer).map(([accountId, data]) => {
+    // earliest joiner first, characters with an unknown join time last
+    const characters = sortBy(data.characters, [
+      (character) => (character.joinedAt === null ? 1 : 0),
+      "joinedAt",
+    ]);
+    const known = characters.filter((character) => character.joinedAt !== null);
+    return {
+      key: "account-" + accountId,
+      player: data.player,
+      unlinked: false,
+      count: data.count,
+      // when the player first had two characters in fleet at once
+      multiboxingSince: known.length >= 2 ? known[1].joinedAt : null,
+      characters,
+    };
+  });
 
   return {
-    // most characters first, then by name so equal counts stay in a stable order
-    rows: sortBy(playerRows.concat(unlinkedRows), [(row) => -row.count, "player"]),
+    // Most characters first. For equal counts, whoever has had extra characters in fleet
+    // longest comes first (the rule the FCs agreed on), players with no known time after
+    // them, then by name so the order stays stable.
+    rows: sortBy(playerRows.concat(unlinkedRows), [
+      (row) => -row.count,
+      (row) => (row.multiboxingSince === null ? 1 : 0),
+      "multiboxingSince",
+      "player",
+    ]),
     characterCount: members.length,
     pilotCount: playerRows.length,
     multiboxingCount: playerRows.filter((row) => row.count >= MULTIBOX_THRESHOLD).length,
@@ -284,7 +316,7 @@ const CardBody = styled.div`
 
 const CharacterLine = styled.div`
   display: grid;
-  grid-template-columns: 82px 1fr auto;
+  grid-template-columns: 82px 1fr auto auto;
   gap: 8px;
   padding: 5px 10px;
   align-items: center;
@@ -295,6 +327,11 @@ const CharacterLine = styled.div`
 
 const MutedText = styled.span`
   color: ${(props) => props.theme.colors.accent4};
+`;
+
+const TimeText = styled(MutedText)`
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 `;
 
 // The character's name links to their pilot page; it only underlines on hover so the
@@ -327,7 +364,7 @@ const ElseList = styled.div`
 // Fixed name and ship columns so ships line up down the list, as they do in the cards
 const ElseLine = styled.div`
   display: grid;
-  grid-template-columns: minmax(0, 14em) minmax(0, 11em) 1fr auto;
+  grid-template-columns: minmax(0, 14em) minmax(0, 11em) 1fr auto auto;
   align-items: center;
   gap: 8px;
   padding: 5px 10px;
@@ -370,10 +407,10 @@ function CompositionStrip({ cats, grouping }) {
   );
 }
 
-// Memoised on `grouping`, which only changes identity when the fleet is refetched.
-// The parent re-renders on unrelated state (modal toggles, the refresh button), so
-// this skips both the render and the reconciliation of every row in between.
-const MultiboxerCards = React.memo(function MultiboxerCards({ grouping }) {
+// Memoised on `grouping`, which only changes identity when the fleet is refetched, and `now`,
+// which ticks once a minute. The parent re-renders on unrelated state (modal toggles, the
+// refresh button), so this skips both the render and the reconciliation of every row in between.
+const MultiboxerCards = React.memo(function MultiboxerCards({ grouping, now }) {
   const rows = grouping.rows.filter((row) => row.count >= MULTIBOX_THRESHOLD);
 
   return (
@@ -388,6 +425,11 @@ const MultiboxerCards = React.memo(function MultiboxerCards({ grouping }) {
                 <Pill heavy={row.count >= HEAVY_MULTIBOX_THRESHOLD}>
                   <b>{row.count}</b> characters
                 </Pill>
+                {row.multiboxingSince !== null && (
+                  <Pill title="Multiboxing for">
+                    multiboxing {formatTimeInFleet(now, row.multiboxingSince)}
+                  </Pill>
+                )}
               </CardHead>
               <CardBody>
                 {row.characters.map((character) => (
@@ -402,6 +444,7 @@ const MultiboxerCards = React.memo(function MultiboxerCards({ grouping }) {
                         character.name
                       )}
                     </PilotLink>
+                    <TimeText>{formatTimeInFleet(now, character.joinedAt)}</TimeText>
                     <SkillsLink id={character.id} />
                   </CharacterLine>
                 ))}
@@ -418,7 +461,7 @@ const MultiboxerCards = React.memo(function MultiboxerCards({ grouping }) {
 
 // Single-character players and unlinked characters: collapsed by default, and a compact list
 // rather than cards because there is nothing to compare between them.
-const EveryoneElse = React.memo(function EveryoneElse({ grouping }) {
+const EveryoneElse = React.memo(function EveryoneElse({ grouping, now }) {
   const [showAll, setShowAll] = React.useState(false);
   const rows = grouping.rows.filter((row) => row.count < MULTIBOX_THRESHOLD);
 
@@ -439,6 +482,7 @@ const EveryoneElse = React.memo(function EveryoneElse({ grouping }) {
                 <PilotLink to={"/pilot?character_id=" + character.id}>{character.name}</PilotLink>
                 <strong>{character.ship}</strong>
                 <span>{row.unlinked && <Pill muted>unlinked</Pill>}</span>
+                <TimeText>{formatTimeInFleet(now, character.joinedAt)}</TimeText>
                 <SkillsLink id={character.id} />
               </ElseLine>
             ))
@@ -459,6 +503,12 @@ function FleetMembers({refreshedAt}) {
       .then(setFleetMembers)
       .catch((err) => setFleetMembers(null)); // What's error handling?
   }, [characterId, refreshedAt]);
+
+  const [now, setNow] = React.useState(() => Math.floor(Date.now() / 1000));
+  React.useEffect(() => {
+    const timer = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   const members = fleetMembers ? fleetMembers.members : null;
   const grouping = React.useMemo(
@@ -486,8 +536,8 @@ function FleetMembers({refreshedAt}) {
     <>
       <br />
       <CompositionStrip cats={cats} grouping={grouping} />
-      <MultiboxerCards grouping={grouping} />
-      <EveryoneElse grouping={grouping} />
+      <MultiboxerCards grouping={grouping} now={now} />
+      <EveryoneElse grouping={grouping} now={now} />
     </>
   );
 }
