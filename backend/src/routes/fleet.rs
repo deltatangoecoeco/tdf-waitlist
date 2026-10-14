@@ -53,15 +53,18 @@ async fn fleet_status(
     Ok(Json(FleetStatusResponse { fleets }))
 }
 
-async fn get_current_fleet_id(
+#[derive(Debug, Deserialize)]
+struct CharacterFleet {
+    fleet_id: i64,
+    // The current ESI spec makes this required, but it is optional so that callers which only
+    // want the fleet id keep working if ESI omits it: unknown means "not boss".
+    fleet_boss_id: Option<i64>,
+}
+
+async fn get_character_fleet(
     app: &rocket::State<Application>,
     character_id: i64,
-) -> Result<i64, Madness> {
-    #[derive(Debug, Deserialize)]
-    struct BasicInfo {
-        fleet_id: i64,
-    }
-
+) -> Result<CharacterFleet, Madness> {
     let basic_info = app
         .esi_client
         .get(
@@ -76,8 +79,38 @@ async fn get_current_fleet_id(
             e => return Err(e.into()),
         };
     }
-    let basic_info: BasicInfo = basic_info.unwrap();
-    Ok(basic_info.fleet_id)
+    let basic_info: CharacterFleet = basic_info.unwrap();
+    Ok(basic_info)
+}
+
+async fn get_current_fleet_id(
+    app: &rocket::State<Application>,
+    character_id: i64,
+) -> Result<i64, Madness> {
+    Ok(get_character_fleet(app, character_id).await?.fleet_id)
+}
+
+#[derive(Debug, Serialize)]
+struct MyFleetResponse {
+    fleet_id: i64,
+    is_boss: bool,
+}
+
+#[get("/api/fleet/me?<character_id>")]
+async fn my_fleet(
+    app: &rocket::State<Application>,
+    account: AuthenticatedAccount,
+    character_id: i64,
+) -> Result<Json<MyFleetResponse>, Madness> {
+    account.require_access("fleet-configure")?;
+    authorize_character(app.get_db(), &account, character_id, None).await?;
+
+    let fleet = get_character_fleet(app, character_id).await?;
+
+    Ok(Json(MyFleetResponse {
+        fleet_id: fleet.fleet_id,
+        is_boss: fleet.fleet_boss_id == Some(character_id),
+    }))
 }
 
 #[derive(Debug, Serialize)]
@@ -142,6 +175,7 @@ struct FleetMembersMember {
     account_name: Option<String>,
     ship: Hull,
     wl_category: Option<String>,
+    joined_at: Option<i64>,
 }
 
 #[get("/api/fleet/members?<character_id>")]
@@ -227,6 +261,11 @@ async fn fleet_members(
                         .get(&member.squad_id)
                         .and_then(|s| category_lookup.get(s.as_str()))
                         .map(|s| s.to_string()),
+                    joined_at: member
+                        .join_time
+                        .as_deref()
+                        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                        .map(|t| t.timestamp()),
                 }
             })
             .collect(),
@@ -319,6 +358,7 @@ pub fn routes() -> Vec<rocket::Route> {
         fleet_info,
         close_fleet,
         fleet_members,
-        register_fleet
+        register_fleet,
+        my_fleet
     ]
 }
