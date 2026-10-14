@@ -47,6 +47,9 @@ export default {
             "close": "Close",
             "clear_waitlist": "Clear waitlist",
             "kick_everyone": "Kick everyone from fleet",
+            "unregistered_title": "You're the boss of a fleet the waitlist doesn't know about.",
+            "unregistered_text": "Until it's registered, invites won't work and pilots who join won't drop off the waitlist.",
+            "unregistered_button": "Register this fleet",
         },
         "skills": {
             "skills": "Skills",  
@@ -115,6 +118,9 @@ export default {
             "close": "关闭",
             "clear_waitlist": "清空队列",
             "kick_everyone": "清空舰队成员",
+            "unregistered_title": "你是一支尚未在队列中注册的舰队的队长。",
+            "unregistered_text": "注册之前，邀请将无法使用，加入舰队的飞行员也不会从队列中移除。",
+            "unregistered_button": "注册此舰队",
         },
         "skills": {
             "skills": "技能列表",  

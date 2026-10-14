@@ -72,7 +72,7 @@ impl<'a> FitChecker<'a> {
         // checker.check_fit_implants_reqs();
         // checker.check_logi_implants();
         checker.set_category();
-        // checker.add_snowflake_tags();
+        checker.add_snowflake_tags();
         checker.add_implant_tag();
         checker.merge_tags();
         // checker.check_time_in_fleet();
@@ -400,6 +400,16 @@ impl<'a> FitChecker<'a> {
             self.tags.remove("STARTER-FIT");
             self.tags.remove("STARTER-SKILLS");
             self.tags.insert("STARTER");
+        }
+
+        // Upstream only turns a specialist tag into its badge for pilots who pass the elite fit
+        // checks, which this fork doesn't run, so it would never show. Do it here instead: the
+        // cards have shields for BASTION and WEB, not for the -SPECIALIST tags.
+        if self.tags.remove("BASTION-SPECIALIST") {
+            self.tags.insert("BASTION");
+        }
+        if self.tags.remove("WEB-SPECIALIST") {
+            self.tags.insert("WEB");
         }
     }
 
