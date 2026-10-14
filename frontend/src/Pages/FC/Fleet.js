@@ -1,5 +1,7 @@
 import React from "react";
 import { AuthContext, ToastContext, WaitlistContext } from "../../contexts";
+import { UnregisteredFleetBanner } from "../../Components/UnregisteredFleetBanner";
+import { isRegisteredBoss } from "../../Util/fleet";
 import { Confirm } from "../../Components/Modal";
 import { Button, Buttons, InputGroup, NavButton, Select } from "../../Components/Form";
 import { Content, Title } from "../../Components/Page";
@@ -69,6 +71,7 @@ export function Fleet() {
 
   return (
     <>
+      <UnregisteredFleetBanner />
       <Buttons>
         <NavButton to="/fc/fleet/register">{t("load_fleet")}</NavButton>
         {/* <NavButton to="/auth/start/fc">ESI re-auth as FC</NavButton> */}
@@ -81,7 +84,7 @@ export function Fleet() {
           </Button>
         </InputGroup>
         <Button onClick={() => setEmptyWaitlistModalOpen(true)}>{t("clear_waitlist")}</Button>
-        {fleets && fleets.fleets.length > 0 && fleets.fleets.some(n => authContext.current.id === n.boss.id) && 
+        {fleets && fleets.fleets.length > 0 && isRegisteredBoss(fleets.fleets, authContext.current.id) && 
         <Button variant="danger" onClick={() => setFleetCloseModalOpen(true)}>
           {t("kick_everyone")}
           </Button>}
@@ -111,7 +114,7 @@ export function Fleet() {
         </Buttons>
       )}
 
-      {fleets && fleets.fleets.length > 0 && fleets.fleets.some(n => authContext.current.id === n.boss.id) && <FleetMembers refreshedAt={refreshedAt} />}
+      {fleets && fleets.fleets.length > 0 && isRegisteredBoss(fleets.fleets, authContext.current.id) && <FleetMembers refreshedAt={refreshedAt} />}
       <Confirm
         open={fleetCloseModalOpen}
         setOpen={setFleetCloseModalOpen}
