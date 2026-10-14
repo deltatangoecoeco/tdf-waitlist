@@ -861,6 +861,10 @@ pub mod fleet_members {
         pub character_id: i64,
         pub ship_type_id: TypeID,
         pub squad_id: i64,
+        // When this character joined the fleet. Optional so an ESI change can't break
+        // deserialization: the fleet updater reads this struct every few seconds.
+        #[serde(default)]
+        pub join_time: Option<String>,
     }
 
     pub async fn get(
