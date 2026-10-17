@@ -11,6 +11,7 @@ import { Announcements } from "./Announcements";
 import { FCMenu, GuideFC } from "./FCMenu";
 import { View as BadgesView } from "./Badges";
 import { View as CommandersView } from "./Commanders";
+import { SrpWallet } from "./SrpWallet";
 
 const Statistics = React.lazy(() => import("./lazy.statistics"));
 
@@ -26,6 +27,10 @@ export function FCRoutes() {
 
       {authContext && authContext.access["access-manage"] && (
         <Route path="commanders" element={<CommandersView />} />
+      )}
+
+      {authContext && authContext.access["srp-manage"] && (
+        <Route path="srp" element={<SrpWallet />} />
       )}
 
       <Route path="/" element={<FCMenu />} />

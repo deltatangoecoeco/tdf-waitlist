@@ -15,6 +15,7 @@ import {
   faCommentAlt,
   faShieldAlt,
   faUserShield,
+  faWallet,
 } from "@fortawesome/free-solid-svg-icons";
 
 const guideData = {};
@@ -123,6 +124,9 @@ export function FCMenu() {
           )}
         {authContext && authContext.access["waitlist-tag:HQ-FC"] && (
           <GuideCard slug="announcement" name="Announcements" icon={faCommentAlt} />
+        )}
+        {authContext && authContext.access["srp-manage"] && (
+          <GuideCard slug="srp" name="SRP wallet" icon={faWallet} />
         )}
         {authContext && authContext.access["stats-view"] && (
           <GuideCard slug="stats" name="Statistics" icon={faChartLine} />

@@ -112,7 +112,8 @@ export function NavLinks({ whoami }) {
           {t("fleet")}
         </Links>
       )}
-      {whoami && whoami.access["fleet-view"] && (
+      {/* SRP managers who aren't FCs still need the way to the SRP wallet page */}
+      {whoami && (whoami.access["fleet-view"] || whoami.access["srp-manage"]) && (
         <Links end to="/fc">
           {t("fc")}
         </Links>
