@@ -1,5 +1,7 @@
 import React from "react";
 import { AuthContext, ToastContext, WaitlistContext } from "../../contexts";
+import { formatClock } from "../../Util/srp";
+import { STALE_SECONDS, srpStateOf, summariseSrp, useFleetSrp } from "./FleetSrp";
 import { UnregisteredFleetBanner } from "../../Components/UnregisteredFleetBanner";
 import { isRegisteredBoss } from "../../Util/fleet";
 import { Confirm } from "../../Components/Modal";
@@ -282,13 +284,14 @@ const PlayerCard = styled.div`
 
 const CardHead = styled.div`
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 0.3em 0.3em 0.35em 0.6em;
 `;
 
 const PlayerName = styled.span`
-  flex: 1;
+  flex: 1 1 7em;
   min-width: 0;
   font-weight: 600;
   word-break: break-word;
@@ -319,7 +322,8 @@ const CardBody = styled.div`
 
 const CharacterLine = styled.div`
   display: grid;
-  grid-template-columns: 82px 1fr auto auto;
+  grid-template-columns: ${(props) =>
+    props.hasSrp ? "82px 1fr 78px auto auto" : "82px 1fr auto auto"};
   gap: 8px;
   padding: 5px 10px;
   align-items: center;
@@ -334,6 +338,7 @@ const MutedText = styled.span`
 
 const TimeText = styled(MutedText)`
   text-align: right;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 `;
 
@@ -367,7 +372,10 @@ const ElseList = styled.div`
 // Fixed name and ship columns so ships line up down the list, as they do in the cards
 const ElseLine = styled.div`
   display: grid;
-  grid-template-columns: minmax(0, 14em) minmax(0, 11em) 1fr auto auto;
+  grid-template-columns: ${(props) =>
+    props.hasSrp
+      ? "minmax(0, 14em) minmax(0, 11em) 1fr 78px auto auto"
+      : "minmax(0, 14em) minmax(0, 11em) 1fr auto auto"};
   align-items: center;
   gap: 8px;
   padding: 5px 10px;
@@ -384,7 +392,119 @@ function SkillsLink({ id }) {
   );
 }
 
-function CompositionStrip({ cats, grouping }) {
+// "✓ SRP" is quiet (normal text, the check mark carries the green: green text fails contrast on
+// the Light theme), "Checking" is muted and "No SRP" is the amber heavy Pill.
+const SrpPillBase = styled(Pill)`
+  justify-self: start;
+`;
+
+const Check = styled.span`
+  color: ${(props) => props.theme.colors.success.color};
+`;
+
+const CHECKING_HINT = "Joined after the last wallet data; a payment can't show yet";
+
+function SrpPill({ state }) {
+  if (state === "paid") {
+    return (
+      <SrpPillBase>
+        <Check>✓</Check> SRP
+      </SrpPillBase>
+    );
+  }
+  if (state === "checking") {
+    return (
+      <SrpPillBase muted title={CHECKING_HINT}>
+        <span aria-hidden="true">◷</span> Checking
+      </SrpPillBase>
+    );
+  }
+  if (state === "none") {
+    return <SrpPillBase heavy>No SRP</SrpPillBase>;
+  }
+  return <span />;
+}
+
+const SrpLine = styled(Chips)`
+  align-items: center;
+`;
+
+const SrpLabel = styled.span`
+  font-weight: 700;
+  font-size: 0.85em;
+`;
+
+// The "No SRP" count is a button so that touch screens and screen readers can open the names
+const SrpToggle = styled(Pill).attrs({ as: "button", type: "button" })`
+  font-family: inherit;
+  cursor: pointer;
+  &:focus-visible {
+    outline: 2px solid ${(props) => props.theme.colors.active};
+    outline-offset: 2px;
+  }
+`;
+
+const SrpNames = styled.div`
+  font-size: 0.85em;
+  margin-bottom: 0.6em;
+`;
+
+function SrpSummary({ srp, characters, now, canManage }) {
+  const [showNames, setShowNames] = React.useState(false);
+
+  if (!srp.available) {
+    return (
+      <Summary>
+        {canManage ? <Link to="/fc/srp">SRP check unavailable</Link> : "SRP check unavailable"}
+      </Summary>
+    );
+  }
+
+  const { paid, checking, none } = summariseSrp(srp, characters);
+  const stale = srp.dataAsOf === null || now - srp.dataAsOf > STALE_SECONDS;
+  const asOf = srp.dataAsOf === null ? "unknown" : formatClock(new Date(srp.dataAsOf * 1000));
+  return (
+    <>
+      <SrpLine>
+        <SrpLabel>SRP</SrpLabel>
+        <Pill>
+          <Check>✓</Check> {paid} paid
+        </Pill>
+        {checking > 0 && (
+          <Pill muted title={CHECKING_HINT}>
+            <span aria-hidden="true">◷</span> {checking} checking
+          </Pill>
+        )}
+        {none.length > 0 && (
+          <SrpToggle
+            heavy
+            aria-expanded={showNames}
+            aria-controls="fleet-no-srp"
+            onClick={() => setShowNames(!showNames)}
+          >
+            <b>{none.length}</b> No SRP
+          </SrpToggle>
+        )}
+        <Pill heavy={stale} title="When the SRP corp's wallet data was produced">
+          wallet data as of {asOf}
+        </Pill>
+      </SrpLine>
+      {showNames && none.length > 0 && (
+        <SrpNames id="fleet-no-srp">
+          No SRP:{" "}
+          {none.map((character, i) => (
+            <React.Fragment key={character.id}>
+              {i > 0 && ", "}
+              <PilotLink to={"/pilot?character_id=" + character.id}>{character.name}</PilotLink>
+            </React.Fragment>
+          ))}
+        </SrpNames>
+      )}
+    </>
+  );
+}
+
+function CompositionStrip({ cats, grouping, srpLine }) {
   const { characterCount, pilotCount, unlinkedCount } = grouping;
   return (
     <>
@@ -402,6 +522,7 @@ function CompositionStrip({ cats, grouping }) {
           <b>{cats["Mega/Night"]}</b> Megathron/Nightmare
         </Pill>
       </Chips>
+      {srpLine}
       <Summary>
         {characterCount} characters · {pilotCount} pilots
         {unlinkedCount > 0 && ` · ${unlinkedCount} unlinked`}
@@ -413,7 +534,7 @@ function CompositionStrip({ cats, grouping }) {
 // Memoised on `grouping`, which only changes identity when the fleet is refetched, and `now`,
 // which ticks once a minute. The parent re-renders on unrelated state (modal toggles, the
 // refresh button), so this skips both the render and the reconciliation of every row in between.
-const MultiboxerCards = React.memo(function MultiboxerCards({ grouping, now }) {
+const MultiboxerCards = React.memo(function MultiboxerCards({ grouping, now, srp }) {
   const rows = grouping.rows.filter((row) => row.count >= MULTIBOX_THRESHOLD);
 
   return (
@@ -428,6 +549,11 @@ const MultiboxerCards = React.memo(function MultiboxerCards({ grouping, now }) {
                 <Pill heavy={row.count >= HEAVY_MULTIBOX_THRESHOLD}>
                   <b>{row.count}</b> characters
                 </Pill>
+                {srp && (
+                  <Pill title="Characters with an SRP payment">
+                    <b>{summariseSrp(srp, row.characters).paid}</b> of {row.count} SRP
+                  </Pill>
+                )}
                 {row.multiboxingSince !== null && (
                   <Pill title="Multiboxing for">
                     multiboxing {formatTimeInFleet(now, row.multiboxingSince)}
@@ -436,7 +562,7 @@ const MultiboxerCards = React.memo(function MultiboxerCards({ grouping, now }) {
               </CardHead>
               <CardBody>
                 {row.characters.map((character) => (
-                  <CharacterLine key={character.id}>
+                  <CharacterLine key={character.id} hasSrp={!!srp}>
                     <strong>{character.ship}</strong>
                     <PilotLink to={"/pilot?character_id=" + character.id}>
                       {character.name === row.player ? (
@@ -447,6 +573,7 @@ const MultiboxerCards = React.memo(function MultiboxerCards({ grouping, now }) {
                         character.name
                       )}
                     </PilotLink>
+                    {srp && <SrpPill state={srpStateOf(srp, character)} />}
                     <TimeText>{formatTimeInFleet(now, character.joinedAt)}</TimeText>
                     <SkillsLink id={character.id} />
                   </CharacterLine>
@@ -464,27 +591,32 @@ const MultiboxerCards = React.memo(function MultiboxerCards({ grouping, now }) {
 
 // Single-character players and unlinked characters: collapsed by default, and a compact list
 // rather than cards because there is nothing to compare between them.
-const EveryoneElse = React.memo(function EveryoneElse({ grouping, now }) {
+const EveryoneElse = React.memo(function EveryoneElse({ grouping, now, srp }) {
   const [showAll, setShowAll] = React.useState(false);
   const rows = grouping.rows.filter((row) => row.count < MULTIBOX_THRESHOLD);
 
   if (rows.length === 0) {
     return null;
   }
+  // unpaid pilots must not hide behind the collapsed button
+  const characters = rows.flatMap((row) => row.characters);
+  const noSrp = srp ? summariseSrp(srp, characters).none.length : 0;
 
   return (
     <div style={{ marginTop: "14px" }}>
       <Button onClick={() => setShowAll(!showAll)}>
         {showAll ? "Hide pilots on one character" : `+${rows.length} pilots on one character`}
+        {!showAll && noSrp > 0 && ` · ${noSrp} No SRP`}
       </Button>
       {showAll && (
         <ElseList role="list" aria-label="Everyone else">
           {rows.map((row) =>
             row.characters.map((character) => (
-              <ElseLine role="listitem" key={character.id}>
+              <ElseLine role="listitem" key={character.id} hasSrp={!!srp}>
                 <PilotLink to={"/pilot?character_id=" + character.id}>{character.name}</PilotLink>
                 <strong>{character.ship}</strong>
                 <span>{row.unlinked && <Pill muted>unlinked</Pill>}</span>
+                {srp && <SrpPill state={srpStateOf(srp, character)} />}
                 <TimeText>{formatTimeInFleet(now, character.joinedAt)}</TimeText>
                 <SkillsLink id={character.id} />
               </ElseLine>
@@ -498,6 +630,7 @@ const EveryoneElse = React.memo(function EveryoneElse({ grouping, now }) {
 
 function FleetMembers({refreshedAt}) {
   const authContext = React.useContext(AuthContext);
+  const waitlistContext = React.useContext(WaitlistContext);
   const [fleetMembers, setFleetMembers] = React.useState(null);
   const characterId = authContext.current.id;
   React.useEffect(() => {
@@ -519,6 +652,11 @@ function FleetMembers({refreshedAt}) {
     [members]
   );
 
+  const srpResult = useFleetSrp(
+    waitlistContext ? waitlistContext.active : null,
+    members ? members.map((member) => member.id) : []
+  );
+
   if (!fleetMembers) {
     return null;
   }
@@ -535,12 +673,26 @@ function FleetMembers({refreshedAt}) {
     if ("Vindicator" === member.ship.name) cats["Vindicator"]++;
     if (bad.includes(member.ship.name)) cats["Mega/Night"]++;
   });
+  const srp = srpResult && srpResult.available ? srpResult : null;
   return (
     <>
       <br />
-      <CompositionStrip cats={cats} grouping={grouping} />
-      <MultiboxerCards grouping={grouping} now={now} />
-      <EveryoneElse grouping={grouping} now={now} />
+      <CompositionStrip
+        cats={cats}
+        grouping={grouping}
+        srpLine={
+          srpResult && (
+            <SrpSummary
+              srp={srpResult}
+              characters={grouping.rows.flatMap((row) => row.characters)}
+              now={now}
+              canManage={!!authContext.access["srp-manage"]}
+            />
+          )
+        }
+      />
+      <MultiboxerCards grouping={grouping} now={now} srp={srp} />
+      <EveryoneElse grouping={grouping} now={now} srp={srp} />
     </>
   );
 }
