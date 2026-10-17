@@ -7,9 +7,14 @@ pub struct Application {
     pub esi_client: crate::core::esi::ESIClient,
     pub sse_client: crate::core::sse::SSEClient,
     pub token_secret: Vec<u8>,
+    pub srp_state: crate::core::srp::SharedSrpState,
 }
 
-pub fn new(db: Arc<crate::DB>, config: Config) -> Application {
+pub fn new(
+    db: Arc<crate::DB>,
+    config: Config,
+    srp_state: crate::core::srp::SharedSrpState,
+) -> Application {
     Application {
         token_secret: hex::decode(&config.app.token_secret).unwrap(),
         esi_client: crate::core::esi::ESIClient::new(
@@ -23,6 +28,7 @@ pub fn new(db: Arc<crate::DB>, config: Config) -> Application {
         ),
         config,
         db,
+        srp_state,
     }
 }
 

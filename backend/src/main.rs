@@ -38,6 +38,7 @@ async fn main() {
     let config_file = env::var("WAITLIST_CONFIG").unwrap_or_else(|_| "./config.toml".to_string());
     let raw_config = std::fs::read_to_string(&config_file).expect("Could not load config");
     let config: config::Config = toml::from_str(&raw_config).expect("Could not load config");
+    config.srp.validate().expect("Invalid config");
 
     let database = options
         .idle_timeout(std::time::Duration::from_secs(config.database.idle_timeout))
@@ -63,7 +64,15 @@ async fn main() {
         skill_updater.start();
     }
 
-    let application = app::new(database, config);
+    // Shared with the routes, which read it; the updater writes it
+    let srp_state = core::srp::new_shared_state();
+    if config.srp.enable {
+        let srp_updater =
+            core::srp_updater::SrpUpdater::new(database.clone(), config.clone(), srp_state.clone());
+        srp_updater.start();
+    }
+
+    let application = app::new(database, config, srp_state);
     rocket::build()
         .mount("/", routes::routes())
         .manage(application)

@@ -24,3 +24,17 @@ min_in_fleet = 8
 [skill_updater]
 enable = true
 runtime = 86400
+
+# Optional. Reads SRP corps' wallets and contracts to show who has paid SRP. After enabling, connect
+# a wallet per SRP corp and pick each waitlist's SRP corp on the FC dashboard (SRP wallet).
+# Needs sql/migration_postgres_0005.sql.
+# Run a single backend process with it enabled: two would each poll and revoke each other's token.
+# [srp]
+# enable = true
+# managers = ["2112345678"]  # characters (id, or exact name) whose accounts may run the SRP
+#                            # wallet page, besides council and admin (SeAT Exec and IT). Prefer
+#                            # ids: a name can change, or be freed and taken by someone else.
+# Don't overlap backend restarts with it enabled (e.g. rolling deploys): see "single process" above.
+# division = 1               # wallet division that receives payments
+# min_amount = 50000000      # ISK; this much or more counts
+# coverage_hours = 24
