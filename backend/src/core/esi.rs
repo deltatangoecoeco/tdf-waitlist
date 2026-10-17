@@ -91,6 +91,15 @@ pub enum ESIError {
     
 }
 
+/// One page of an ESI list
+pub struct Page<D> {
+    pub body: D,
+    /// From X-Pages; 1 when absent
+    pub pages: i32,
+    /// When ESI produced the data (Last-Modified), if it said
+    pub last_modified: Option<i64>,
+}
+
 /// Every SeAT login asks for these: the login's JWT claims rely on them
 pub const SEAT_LOGIN_SCOPES: [ESIScope; 4] = [
     ESIScope::CAS_OpenID,
@@ -901,15 +910,15 @@ impl ESIClient {
         Ok(esi.access_token)
     }
 
-    /// GET on ESI's current unversioned routes, which require a compatibility date. Returns the
-    /// body and the page count from X-Pages (1 when absent). Newer code uses these because ESI
-    /// now versions by date; the `/vN/` routes used elsewhere are its legacy scheme.
+    /// GET on ESI's current unversioned routes, which require a compatibility date. Newer code uses
+    /// these because ESI now versions by date; the `/vN/` routes used elsewhere are its legacy
+    /// scheme.
     pub async fn get_page<D: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         access_token: &str,
         page: i32,
-    ) -> Result<(D, i32), ESIError> {
+    ) -> Result<Page<D>, ESIError> {
         let response = self
             .raw
             .http
@@ -920,14 +929,23 @@ impl ESIClient {
             .await?
             .error_for_status()?;
 
-        let pages = response
-            .headers()
-            .get("X-Pages")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1);
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        let pages = header("X-Pages").and_then(|v| v.parse().ok()).unwrap_or(1);
+        let last_modified = header("Last-Modified")
+            .and_then(|v| chrono::DateTime::parse_from_rfc2822(&v).ok())
+            .map(|t| t.timestamp());
 
-        Ok((response.json().await?, pages))
+        Ok(Page {
+            body: response.json().await?,
+            pages,
+            last_modified,
+        })
     }
 
     pub async fn check(&self, account_id: i64) -> bool {

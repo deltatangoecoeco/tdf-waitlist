@@ -212,12 +212,30 @@ pub fn journal_page_reaches_past_window(entries: &[JournalEntry], now: i64, rule
     }
 }
 
+/// One successful read of a corp's wallet
+pub struct WalletRead {
+    pub paid: HashMap<i64, Payment>,
+    /// When ESI produced the data, if it said: the older of the journal's and the contracts'.
+    /// A payment made after this can't show yet.
+    pub data_as_of: Option<i64>,
+}
+
+/// The older of two times either of which may be unknown
+pub fn older(a: Option<i64>, b: Option<i64>) -> Option<i64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
 /// One SRP corp's check results
 #[derive(Debug, Default)]
 pub struct CorpState {
     pub paid: HashMap<i64, Payment>,
     /// When the wallet was last read successfully
     pub checked_at: Option<i64>,
+    /// When ESI produced that data; see `WalletRead`
+    pub data_as_of: Option<i64>,
     /// Why the last check failed, if it did, in words an admin can act on
     pub last_error: Option<String>,
     /// Bumped whenever this corp's wallet is connected, reconnected or disconnected, so a check
@@ -250,16 +268,17 @@ impl CorpState {
     pub fn apply(
         &mut self,
         generation: u64,
-        result: Result<HashMap<i64, Payment>, String>,
+        result: Result<WalletRead, String>,
         now: i64,
     ) -> Applied {
         if generation != self.generation {
             return Applied::Discarded;
         }
         match result {
-            Ok(paid) => {
+            Ok(read) => {
                 let recovered = self.last_error.is_some();
-                self.paid = paid;
+                self.paid = read.paid;
+                self.data_as_of = read.data_as_of;
                 self.checked_at = Some(now);
                 self.last_error = None;
                 match recovered {
@@ -653,8 +672,26 @@ pub mod waitlists {
 }
 
 #[cfg(test)]
+impl From<HashMap<i64, Payment>> for WalletRead {
+    fn from(paid: HashMap<i64, Payment>) -> WalletRead {
+        WalletRead {
+            paid,
+            data_as_of: None,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_is_as_old_as_its_older_source() {
+        assert_eq!(older(Some(100), Some(200)), Some(100));
+        assert_eq!(older(None, Some(200)), Some(200));
+        assert_eq!(older(Some(100), None), Some(100));
+        assert_eq!(older(None, None), None);
+    }
 
     const CORP: i64 = 98000001;
     // 2026-10-09T15:00:00Z
@@ -949,8 +986,10 @@ mod tests {
     #[test]
     fn connection_change_clears_that_corp_only() {
         let mut state = SrpState::default();
-        state.corp_mut(CORP).apply(0, Ok(paid_one()), NOW);
-        state.corp_mut(CORP + 1).apply(0, Ok(paid_one()), NOW);
+        state.corp_mut(CORP).apply(0, Ok(paid_one().into()), NOW);
+        state
+            .corp_mut(CORP + 1)
+            .apply(0, Ok(paid_one().into()), NOW);
         state.connect_failed(NOW, "failed".to_string());
         state.wallet_removed(CORP);
         assert!(!state.corp(CORP).unwrap().is_fresh(NOW));
@@ -963,7 +1002,7 @@ mod tests {
     #[test]
     fn a_reconnect_keeps_the_last_good_result() {
         let mut state = SrpState::default();
-        state.corp_mut(CORP).apply(0, Ok(paid_one()), NOW);
+        state.corp_mut(CORP).apply(0, Ok(paid_one().into()), NOW);
         state.connect_failed(NOW, "failed".to_string());
         state.wallet_replaced(CORP);
         assert!(state.recent_connect_error(NOW).is_none());
@@ -989,7 +1028,7 @@ mod tests {
     #[test]
     fn a_failed_check_keeps_the_last_good_result() {
         let mut corp = CorpState::default();
-        assert_eq!(corp.apply(0, Ok(paid_one()), NOW), Applied::Updated);
+        assert_eq!(corp.apply(0, Ok(paid_one().into()), NOW), Applied::Updated);
         assert_eq!(
             corp.apply(0, Err("ESI down".to_string()), NOW + 300),
             Applied::Failed
@@ -997,7 +1036,10 @@ mod tests {
         assert_eq!(corp.paid.len(), 1);
         assert_eq!(corp.checked_at, Some(NOW));
         assert_eq!(corp.last_error.as_deref(), Some("ESI down"));
-        assert_eq!(corp.apply(0, Ok(paid_one()), NOW + 600), Applied::Recovered);
+        assert_eq!(
+            corp.apply(0, Ok(paid_one().into()), NOW + 600),
+            Applied::Recovered
+        );
         assert!(corp.last_error.is_none());
     }
 
@@ -1009,13 +1051,15 @@ mod tests {
         assert_eq!(
             state
                 .corp_mut(CORP)
-                .apply(started_with, Ok(paid_one()), NOW),
+                .apply(started_with, Ok(paid_one().into()), NOW),
             Applied::Discarded
         );
         assert!(state.corp(CORP).unwrap().paid.is_empty());
         let generation = state.generation(CORP);
         assert_eq!(
-            state.corp_mut(CORP).apply(generation, Ok(paid_one()), NOW),
+            state
+                .corp_mut(CORP)
+                .apply(generation, Ok(paid_one().into()), NOW),
             Applied::Updated
         );
     }

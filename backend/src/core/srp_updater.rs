@@ -1,10 +1,11 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::{Config, SrpConfig};
 use crate::core::esi::{ESIClient, ESIError};
-use crate::core::srp::{self, connection, database_error, Applied, Payment, Rule, SharedSrpState};
+use crate::core::srp::{
+    self, connection, database_error, Applied, Rule, SharedSrpState, WalletRead,
+};
 
 /// The journal is cached by ESI for an hour and contracts for five minutes, so checking more often
 /// than this gains nothing
@@ -124,27 +125,32 @@ fn more_pages(page: i32, pages: i32, what: &str) -> Result<bool, String> {
     }
 }
 
-/// Pages through `path` until the last page, or until `done` says a page is enough
+/// Pages through `path` until the last page, or until `done` says a page is enough. Also returns
+/// when ESI produced the data, from the first page.
 async fn fetch_pages<T: serde::de::DeserializeOwned>(
     esi: &ESIClient,
     path: &str,
     token: &str,
     what: &str,
     done: impl Fn(&[T]) -> bool,
-) -> Result<Vec<T>, String> {
+) -> Result<(Vec<T>, Option<i64>), String> {
     let mut all = Vec::new();
+    let mut produced_at = None;
     for page in 1.. {
-        let (entries, pages): (Vec<T>, i32) = esi
-            .get_page(path, token, page)
+        let fetched = esi
+            .get_page::<Vec<T>>(path, token, page)
             .await
             .map_err(|e| describe_esi_error(what, e))?;
-        let enough = done(&entries);
-        all.extend(entries);
-        if enough || !more_pages(page, pages, what)? {
+        if page == 1 {
+            produced_at = fetched.last_modified;
+        }
+        let enough = done(&fetched.body);
+        all.extend(fetched.body);
+        if enough || !more_pages(page, fetched.pages, what)? {
             break;
         }
     }
-    Ok(all)
+    Ok((all, produced_at))
 }
 
 async fn fetch(
@@ -152,7 +158,7 @@ async fn fetch(
     db: &crate::DB,
     config: &SrpConfig,
     conn: &connection::Connection,
-) -> Result<HashMap<i64, Payment>, String> {
+) -> Result<WalletRead, String> {
     let (seat_token, new_refresh_token) = within(async {
         esi.refresh_seat_login(&conn.refresh_token)
             .await
@@ -202,7 +208,7 @@ async fn read_wallet(
     config: &SrpConfig,
     conn: &connection::Connection,
     seat_token: &str,
-) -> Result<HashMap<i64, Payment>, String> {
+) -> Result<WalletRead, String> {
     let token = esi
         .passthrough_token(seat_token, conn.character_id, srp::WALLET_SCOPES)
         .await
@@ -211,7 +217,7 @@ async fn read_wallet(
     let rule = Rule::from_config(config);
     let now = chrono::Utc::now().timestamp();
 
-    let journal = fetch_pages(
+    let (journal, journal_as_of) = fetch_pages(
         esi,
         &format!(
             "/corporations/{}/wallets/{}/journal",
@@ -222,7 +228,7 @@ async fn read_wallet(
         |page| srp::journal_page_reaches_past_window(page, now, &rule),
     )
     .await?;
-    let contracts = fetch_pages(
+    let (contracts, contracts_as_of) = fetch_pages(
         esi,
         &format!("/corporations/{}/contracts", conn.corporation_id),
         &token,
@@ -231,10 +237,13 @@ async fn read_wallet(
     )
     .await?;
 
-    Ok(srp::merge(
-        srp::paid_from_journal(&journal, now, &rule),
-        srp::paid_from_contracts(&contracts, conn.corporation_id, now, &rule),
-    ))
+    Ok(WalletRead {
+        paid: srp::merge(
+            srp::paid_from_journal(&journal, now, &rule),
+            srp::paid_from_contracts(&contracts, conn.corporation_id, now, &rule),
+        ),
+        data_as_of: srp::older(journal_as_of, contracts_as_of),
+    })
 }
 
 fn describe_token_error(error: ESIError) -> String {

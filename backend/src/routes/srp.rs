@@ -18,6 +18,20 @@ use crate::{
 
 // Enough for any account's characters; stops the route being used for bulk lookups
 const MAX_CHARACTERS: usize = 50;
+// Larger than any fleet the waitlist runs
+const MAX_FLEET_CHARACTERS: usize = 300;
+
+fn parse_ids(character_ids: &str, max: usize) -> Result<Vec<i64>, Madness> {
+    let ids = character_ids
+        .split(',')
+        .map(|id| id.trim().parse::<i64>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| Madness::BadRequest("Invalid character_ids".to_string()))?;
+    match ids.len() > max {
+        true => Err(Madness::BadRequest("Too many characters".to_string())),
+        false => Ok(ids),
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct CharacterStatus {
@@ -49,8 +63,13 @@ enum WaitlistStatus {
     NotApplicable,
     /// Its corp has no recent successful check: show nothing rather than guess
     Unavailable,
-    /// When the corp was checked, and each character's cover from payments to that corp
-    Available(Option<i64>, Vec<CharacterStatus>),
+    /// Each character's cover from payments to that corp
+    Available {
+        checked_at: Option<i64>,
+        /// When ESI produced the wallet data; a payment made after it can't show yet
+        data_as_of: Option<i64>,
+        characters: Vec<CharacterStatus>,
+    },
 }
 
 fn waitlist_status(
@@ -65,12 +84,14 @@ fn waitlist_status(
         None => return WaitlistStatus::NotApplicable,
     };
     match state.corp(corporation_id) {
-        Some(corp) if corp.is_fresh(now) => WaitlistStatus::Available(
-            corp.checked_at,
-            ids.iter()
+        Some(corp) if corp.is_fresh(now) => WaitlistStatus::Available {
+            checked_at: corp.checked_at,
+            data_as_of: corp.data_as_of,
+            characters: ids
+                .iter()
                 .map(|&id| character_status(&corp.paid, id, now, rule))
                 .collect(),
-        ),
+        },
         _ => WaitlistStatus::Unavailable,
     }
 }
@@ -97,14 +118,7 @@ async fn status(
     character_ids: &str,
     waitlist_id: i64,
 ) -> Result<Json<StatusResponse>, Madness> {
-    let ids = character_ids
-        .split(',')
-        .map(|id| id.trim().parse::<i64>())
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| Madness::BadRequest("Invalid character_ids".to_string()))?;
-    if ids.len() > MAX_CHARACTERS {
-        return Err(Madness::BadRequest("Too many characters".to_string()));
-    }
+    let ids = parse_ids(character_ids, MAX_CHARACTERS)?;
 
     let config = &app.config.srp;
     let rule = Rule::from_config(config);
@@ -139,7 +153,11 @@ async fn status(
         &rule,
     );
     let (checked_at, characters) = match status {
-        WaitlistStatus::Available(checked_at, characters) => (checked_at, characters),
+        WaitlistStatus::Available {
+            checked_at,
+            characters,
+            ..
+        } => (checked_at, characters),
         WaitlistStatus::Unavailable => return Ok(Json(nothing(true))),
         WaitlistStatus::NotApplicable => return Ok(Json(nothing(false))),
     };
@@ -152,6 +170,67 @@ async fn status(
         coverage_hours: config.coverage_hours,
         characters,
     }))
+}
+
+#[derive(Debug, Serialize)]
+struct FleetStatusResponse {
+    /// As for pilots: false when SRP is off or the waitlist has no SRP corp
+    applies: bool,
+    available: bool,
+    checked_at: Option<i64>,
+    /// When ESI produced the wallet data. A member who joined the fleet after it may have paid
+    /// already without it showing.
+    data_as_of: Option<i64>,
+    characters: Vec<CharacterStatus>,
+}
+
+/// For FCs: the SRP cover of fleet members on `waitlist_id`. Any characters, unlike the pilot
+/// route, so it needs fleet access.
+#[get("/api/srp/fleet?<character_ids>&<waitlist_id>")]
+async fn fleet_status(
+    app: &rocket::State<Application>,
+    account: AuthenticatedAccount,
+    character_ids: &str,
+    waitlist_id: i64,
+) -> Result<Json<FleetStatusResponse>, Madness> {
+    account.require_access("fleet-view")?;
+    let ids = parse_ids(character_ids, MAX_FLEET_CHARACTERS)?;
+
+    let config = &app.config.srp;
+    let corporation_id = match config.enable {
+        true => srp::waitlists::corporation_of(app.get_db(), waitlist_id).await?,
+        false => None,
+    };
+    let now = chrono::Utc::now().timestamp();
+    let status = waitlist_status(
+        &app.srp_state.read(),
+        corporation_id,
+        &ids,
+        now,
+        &Rule::from_config(config),
+    );
+
+    let response = match status {
+        WaitlistStatus::Available {
+            checked_at,
+            data_as_of,
+            characters,
+        } => FleetStatusResponse {
+            applies: true,
+            available: true,
+            checked_at,
+            data_as_of,
+            characters,
+        },
+        other => FleetStatusResponse {
+            applies: matches!(other, WaitlistStatus::Unavailable),
+            available: false,
+            checked_at: None,
+            data_as_of: None,
+            characters: Vec::new(),
+        },
+    };
+    Ok(Json(response))
 }
 
 #[derive(Debug, Serialize)]
@@ -538,7 +617,14 @@ async fn save_connection(
 }
 
 pub fn routes() -> Vec<rocket::Route> {
-    routes![status, admin_status, set_waitlist, connect, disconnect]
+    routes![
+        status,
+        fleet_status,
+        admin_status,
+        set_waitlist,
+        connect,
+        disconnect
+    ]
 }
 
 #[cfg(test)]
@@ -563,11 +649,37 @@ mod tests {
 
     fn paid_ids(status: WaitlistStatus) -> Vec<i64> {
         match status {
-            WaitlistStatus::Available(_, characters) => characters
+            WaitlistStatus::Available { characters, .. } => characters
                 .into_iter()
                 .filter(|c| c.paid)
                 .map(|c| c.id)
                 .collect(),
+            other => panic!("expected a status, got {:?}", other),
+        }
+    }
+
+    // The fleet page tells "may have paid, can't show yet" from "not paid" by the data's age
+    #[test]
+    fn status_carries_when_the_wallet_data_was_produced() {
+        let rule = Rule {
+            min_amount: 50_000_000.0,
+            coverage_secs: 24 * 3600,
+        };
+        let mut state = SrpState::default();
+        let read = srp::WalletRead {
+            paid: paid(1),
+            data_as_of: Some(NOW - 1200),
+        };
+        state.corp_mut(TDF_CORP).apply(0, Ok(read), NOW);
+        match waitlist_status(&state, Some(TDF_CORP), &[1, 2], NOW, &rule) {
+            WaitlistStatus::Available {
+                checked_at,
+                data_as_of,
+                ..
+            } => {
+                assert_eq!(checked_at, Some(NOW));
+                assert_eq!(data_as_of, Some(NOW - 1200));
+            }
             other => panic!("expected a status, got {:?}", other),
         }
     }
@@ -582,8 +694,8 @@ mod tests {
         };
         let mut state = SrpState::default();
         // Character 1 paid the TDF corp, character 2 the CN corp
-        state.corp_mut(TDF_CORP).apply(0, Ok(paid(1)), NOW);
-        state.corp_mut(CN_CORP).apply(0, Ok(paid(2)), NOW);
+        state.corp_mut(TDF_CORP).apply(0, Ok(paid(1).into()), NOW);
+        state.corp_mut(CN_CORP).apply(0, Ok(paid(2).into()), NOW);
         let pilots = [1, 2, 3];
 
         let tdf_waitlist = waitlist_status(&state, Some(TDF_CORP), &pilots, NOW, &rule);
