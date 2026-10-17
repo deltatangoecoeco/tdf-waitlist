@@ -91,6 +91,13 @@ pub enum ESIError {
     
 }
 
+/// An HTTP date, as ESI sends in Last-Modified ("Sat, 17 Oct 2026 12:00:00 GMT"), as unix seconds
+pub fn parse_last_modified(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc2822(value)
+        .ok()
+        .map(|t| t.timestamp())
+}
+
 /// One page of an ESI list
 pub struct Page<D> {
     pub body: D,
@@ -937,9 +944,7 @@ impl ESIClient {
                 .map(str::to_owned)
         };
         let pages = header("X-Pages").and_then(|v| v.parse().ok()).unwrap_or(1);
-        let last_modified = header("Last-Modified")
-            .and_then(|v| chrono::DateTime::parse_from_rfc2822(&v).ok())
-            .map(|t| t.timestamp());
+        let last_modified = header("Last-Modified").and_then(|v| parse_last_modified(&v));
 
         Ok(Page {
             body: response.json().await?,
@@ -1001,4 +1006,20 @@ fn split_scopes(input: &str) -> BTreeSet<String> {
 
 fn join_scopes(input: &BTreeSet<String>) -> String {
     input.iter().fold(String::new(), |a, b| a + b + " ")
+}
+
+#[cfg(test)]
+mod last_modified_tests {
+    use super::parse_last_modified;
+
+    #[test]
+    fn parses_esi_last_modified() {
+        // 2026-10-17T12:00:00Z
+        assert_eq!(
+            parse_last_modified("Sat, 17 Oct 2026 12:00:00 GMT"),
+            Some(1792238400)
+        );
+        assert_eq!(parse_last_modified("yesterday"), None);
+        assert_eq!(parse_last_modified(""), None);
+    }
 }

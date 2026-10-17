@@ -220,11 +220,12 @@ pub struct WalletRead {
     pub data_as_of: Option<i64>,
 }
 
-/// The older of two times either of which may be unknown
+/// The older of two times. Unknown if either is: the known one could be the fresher source, and
+/// claiming fresher data than we have would show "No SRP" where it should show "Checking".
 pub fn older(a: Option<i64>, b: Option<i64>) -> Option<i64> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
+        _ => None,
     }
 }
 
@@ -688,8 +689,8 @@ mod tests {
     #[test]
     fn data_is_as_old_as_its_older_source() {
         assert_eq!(older(Some(100), Some(200)), Some(100));
-        assert_eq!(older(None, Some(200)), Some(200));
-        assert_eq!(older(Some(100), None), Some(100));
+        assert_eq!(older(None, Some(200)), None);
+        assert_eq!(older(Some(100), None), None);
         assert_eq!(older(None, None), None);
     }
 

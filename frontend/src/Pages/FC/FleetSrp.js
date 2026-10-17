@@ -1,5 +1,6 @@
 import React from "react";
 import { apiCall } from "../../api";
+import { formatClock } from "../../Util/srp";
 
 const POLL_MS = 60000;
 
@@ -13,10 +14,9 @@ export const STALE_SECONDS = 90 * 60;
 // character id to its entry. Stops polling once the server says SRP doesn't apply here, until the
 // waitlist or the fleet's members change. A failed request keeps the last answer on screen.
 //
-// The effect is keyed on the sorted ids, so SSE-driven refreshes that leave the same people in
-// fleet don't send another request. When the ids do change the old answer stays on screen until
-// the new one lands (only a different waitlist discards it), so pills don't flicker as pilots
-// come and go.
+// The page only refetches its member list on load and on Refresh; this poll is what turns
+// "Checking" into paid or "No SRP" as newer wallet data arrives. When the members change, the old
+// answer stays on screen until the new one lands, so pills don't flicker.
 export function useFleetSrp(waitlistId, characterIds) {
   const [result, setResult] = React.useState(null);
   const idsParam = [...characterIds].sort((a, b) => a - b).join(",");
@@ -33,22 +33,24 @@ export function useFleetSrp(waitlistId, characterIds) {
     const load = () => {
       apiCall(`/api/srp/fleet?waitlist_id=${waitlistId}&character_ids=${idsParam}`, {}).then(
         (data) => {
-          if (cancelled) return;
-          if (!data || data.applies === false) {
+          if (cancelled || !data) return;
+          if (data.applies === false) {
             setResult(null);
-            if (data) stop();
+            stop();
             return;
           }
           const byId = {};
           (data.characters || []).forEach((entry) => {
             byId[entry.id] = entry;
           });
+          // when the wallet data was produced; a payment made after this can't show yet. Unknown
+          // stays unknown: when we read it says nothing about how old ESI's data was.
+          const dataAsOf = data.data_as_of ?? null;
           setResult({
             waitlistId,
             available: !!data.available,
-            // when the wallet data was produced; a payment made after this can't show yet. Unknown
-            // stays unknown: when we read it says nothing about how old ESI's data was.
-            dataAsOf: data.data_as_of ?? null,
+            dataAsOf,
+            asOf: dataAsOf === null ? null : formatClock(new Date(dataAsOf * 1000)),
             byId,
           });
         },

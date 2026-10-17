@@ -402,13 +402,13 @@ const Check = styled.span`
   color: ${(props) => props.theme.colors.success.color};
 `;
 
-const CHECKING_HINT = "Joined after the last wallet data; a payment can't show yet";
+const CHECKING_HINT = "Too recent for a payment to show in the wallet data yet";
 
-function SrpPill({ state }) {
+function SrpPill({ state, asOf }) {
   if (state === "paid") {
     return (
       <SrpPillBase>
-        <Check>✓</Check> SRP
+        <Check aria-hidden="true">✓</Check> SRP
       </SrpPillBase>
     );
   }
@@ -420,7 +420,11 @@ function SrpPill({ state }) {
     );
   }
   if (state === "none") {
-    return <SrpPillBase heavy>No SRP</SrpPillBase>;
+    return (
+      <SrpPillBase heavy title={`No payment in the wallet data as of ${asOf || "an unknown time"}`}>
+        No SRP
+      </SrpPillBase>
+    );
   }
   return <span />;
 }
@@ -437,6 +441,8 @@ const SrpLabel = styled.span`
 // The "No SRP" count is a button so that touch screens and screen readers can open the names
 const SrpToggle = styled(Pill).attrs({ as: "button", type: "button" })`
   font-family: inherit;
+  line-height: inherit;
+  margin: 0;
   cursor: pointer;
   &:focus-visible {
     outline: 2px solid ${(props) => props.theme.colors.active};
@@ -449,7 +455,7 @@ const SrpNames = styled.div`
   margin-bottom: 0.6em;
 `;
 
-function SrpSummary({ srp, characters, now, canManage }) {
+function SrpSummary({ srp, characters, now, canManage, waitlistName }) {
   const [showNames, setShowNames] = React.useState(false);
 
   if (!srp.available) {
@@ -466,9 +472,10 @@ function SrpSummary({ srp, characters, now, canManage }) {
   return (
     <>
       <SrpLine>
-        <SrpLabel>SRP</SrpLabel>
+        {/* the corp comes from the waitlist selected above, so say which */}
+        <SrpLabel>SRP{waitlistName && ` (${waitlistName})`}</SrpLabel>
         <Pill>
-          <Check>✓</Check> {paid} paid
+          <Check aria-hidden="true">✓</Check> {paid} paid
         </Pill>
         {checking > 0 && (
           <Pill muted title={CHECKING_HINT}>
@@ -479,7 +486,8 @@ function SrpSummary({ srp, characters, now, canManage }) {
           <SrpToggle
             heavy
             aria-expanded={showNames}
-            aria-controls="fleet-no-srp"
+            aria-controls={showNames ? "fleet-no-srp" : undefined}
+            title={`No payment in the wallet data as of ${asOf}`}
             onClick={() => setShowNames(!showNames)}
           >
             <b>{none.length}</b> No SRP
@@ -573,7 +581,7 @@ const MultiboxerCards = React.memo(function MultiboxerCards({ grouping, now, srp
                         character.name
                       )}
                     </PilotLink>
-                    {srp && <SrpPill state={srpStateOf(srp, character)} />}
+                    {srp && <SrpPill state={srpStateOf(srp, character)} asOf={srp.asOf} />}
                     <TimeText>{formatTimeInFleet(now, character.joinedAt)}</TimeText>
                     <SkillsLink id={character.id} />
                   </CharacterLine>
@@ -616,7 +624,7 @@ const EveryoneElse = React.memo(function EveryoneElse({ grouping, now, srp }) {
                 <PilotLink to={"/pilot?character_id=" + character.id}>{character.name}</PilotLink>
                 <strong>{character.ship}</strong>
                 <span>{row.unlinked && <Pill muted>unlinked</Pill>}</span>
-                {srp && <SrpPill state={srpStateOf(srp, character)} />}
+                {srp && <SrpPill state={srpStateOf(srp, character)} asOf={srp.asOf} />}
                 <TimeText>{formatTimeInFleet(now, character.joinedAt)}</TimeText>
                 <SkillsLink id={character.id} />
               </ElseLine>
@@ -674,6 +682,11 @@ function FleetMembers({refreshedAt}) {
     if (bad.includes(member.ship.name)) cats["Mega/Night"]++;
   });
   const srp = srpResult && srpResult.available ? srpResult : null;
+  const selectedWaitlist =
+    waitlistContext && waitlistContext.available
+      ? waitlistContext.available.find((w) => w.id === waitlistContext.active)
+      : null;
+  const waitlistName = selectedWaitlist ? selectedWaitlist.name : null;
   return (
     <>
       <br />
@@ -684,6 +697,7 @@ function FleetMembers({refreshedAt}) {
           srpResult && (
             <SrpSummary
               srp={srpResult}
+              waitlistName={waitlistName}
               characters={grouping.rows.flatMap((row) => row.characters)}
               now={now}
               canManage={!!authContext.access["srp-manage"]}

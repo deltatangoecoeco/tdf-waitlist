@@ -141,8 +141,16 @@ async fn fetch_pages<T: serde::de::DeserializeOwned>(
             .get_page::<Vec<T>>(path, token, page)
             .await
             .map_err(|e| describe_esi_error(what, e))?;
+        // The newest entries are on the first page, so its age is the data's age
         if page == 1 {
             produced_at = fetched.last_modified;
+            if produced_at.is_none() {
+                warn!(
+                    "ESI sent no usable Last-Modified for the {}; the fleet page will show \
+                    unpaid members as Checking",
+                    what
+                );
+            }
         }
         let enough = done(&fetched.body);
         all.extend(fetched.body);

@@ -222,8 +222,15 @@ async fn fleet_status(
             data_as_of,
             characters,
         },
-        other => FleetStatusResponse {
-            applies: matches!(other, WaitlistStatus::Unavailable),
+        WaitlistStatus::Unavailable => FleetStatusResponse {
+            applies: true,
+            available: false,
+            checked_at: None,
+            data_as_of: None,
+            characters: Vec::new(),
+        },
+        WaitlistStatus::NotApplicable => FleetStatusResponse {
+            applies: false,
             available: false,
             checked_at: None,
             data_as_of: None,
