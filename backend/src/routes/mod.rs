@@ -15,6 +15,7 @@ mod pilot;
 mod search;
 mod skillplans;
 mod skills;
+mod srp;
 mod sse;
 mod statistics;
 mod waitlist;
@@ -43,6 +44,7 @@ pub fn routes() -> Vec<rocket::Route> {
         skillplans::routes(),
         fittings::routes(),
         announcements::routes(),
+        srp::routes(),
     ]
     .concat()
 }

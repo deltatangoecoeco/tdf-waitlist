@@ -5,13 +5,14 @@ use branca::Branca;
 
 use rocket::http::RawStr;
 use rocket::request::{FromRequest, Outcome};
+use rocket::response::Redirect;
 use rocket::serde::json::Json;
 use rocket::{request, Request};
 use serde::{Deserialize, Serialize};
 
 use crate::app;
 use crate::core::auth::{AuthenticatedAccount, AuthenticationError, CookieSetter};
-use crate::core::esi::{ESIError, ESIScope};
+use crate::core::esi::{ESIError, ESIScope, SEAT_LOGIN_SCOPES};
 use crate::util::{madness::Madness, types};
 
 pub struct RealIP(IpAddr);
@@ -75,6 +76,13 @@ async fn whoami(
     for key in account.access {
         access_levels.push(key.as_str());
     }
+    // Named SRP managers get the SRP wallet page without a council role
+    let named: Vec<(i64, &str)> = characters.iter().map(|c| (c.id, c.name.as_str())).collect();
+    if !account.access.contains("srp-manage")
+        && crate::core::srp::named_manager(&app.config.srp.managers, &named)
+    {
+        access_levels.push("srp-manage");
+    }
 
     Ok(Json(WhoamiResponse {
         account_id: account.id,
@@ -107,8 +115,6 @@ async fn logout<'r>(
 
 #[get("/api/auth/login_url")]
 fn login_url(/*fc: bool, client_ip: RealIP,*/ app: &rocket::State<app::Application>) -> String {
-    let mut branca = Branca::new(&app.token_secret).unwrap();
-
     // let ip_bytes = match client_ip.0 {
     //     IpAddr::V4(ip) => [
     //         ip.octets(),
@@ -117,13 +123,8 @@ fn login_url(/*fc: bool, client_ip: RealIP,*/ app: &rocket::State<app::Applicati
     //     IpAddr::V6(ip) => ip.octets(),
     // };
 
-    let state = branca.encode(b"oauthhellostate").unwrap();
-
-    let scopes = vec![
-        ESIScope::CAS_OpenID,
-        ESIScope::CAS_Accounts,
-        ESIScope::CAS_Groups,
-        ESIScope::CAS_Passthrough,
+    let mut scopes = SEAT_LOGIN_SCOPES.to_vec();
+    scopes.extend([
         // ESIScope::PublicData,
         ESIScope::Skills_ReadSkills_v1,
         ESIScope::Clones_ReadImplants_v1,
@@ -131,7 +132,7 @@ fn login_url(/*fc: bool, client_ip: RealIP,*/ app: &rocket::State<app::Applicati
         ESIScope::Fleets_ReadFleet_v1,
         ESIScope::Fleets_WriteFleet_v1,
         ESIScope::UI_OpenWindow_v1,
-    ];
+    ]);
     // if fc {
     //     scopes.extend(vec![
     //         ESIScope::Fleets_ReadFleet_v1,
@@ -139,6 +140,15 @@ fn login_url(/*fc: bool, client_ip: RealIP,*/ app: &rocket::State<app::Applicati
     //         ESIScope::UI_OpenWindow_v1,
     //     ])
     // }
+
+    authorize_url(app, &scopes, b"oauthhellostate")
+}
+
+/// The SeAT login URL. SeAT accepts a single redirect URI, so every login, including connecting
+/// the SRP wallet, comes back through `callback`; `state` says which kind it was.
+pub fn authorize_url(app: &app::Application, scopes: &[ESIScope], state: &[u8]) -> String {
+    let mut branca = Branca::new(&app.token_secret).unwrap();
+    let state = branca.encode(state).unwrap();
 
     let redirect_uri = RawStr::new(&app.config.esi.url);
     let redirect_uri_encoded = redirect_uri.percent_encode();
@@ -159,6 +169,15 @@ fn login_url(/*fc: bool, client_ip: RealIP,*/ app: &rocket::State<app::Applicati
 //     state: Option<&'r str>,
 // }
 
+// One per login, so the Redirect variant's size doesn't matter, and Rocket can't respond with a
+// Box<Redirect>
+#[allow(clippy::large_enum_variant)]
+#[derive(Responder)]
+enum CallbackResponse {
+    Login(CookieSetter),
+    Redirect(Redirect),
+}
+
 #[get("/api/auth/cb?<code>&<state>")]
 async fn callback(
     code: &str,
@@ -167,7 +186,7 @@ async fn callback(
     // client_ip: RealIP, 
     app: &rocket::State<app::Application>,
     account_raw: Result<AuthenticatedAccount, AuthenticationError>,
-) -> Result<CookieSetter, Madness> {
+) -> Result<CallbackResponse, Madness> {
 
     let branca = Branca::new(&app.token_secret).unwrap();
 
@@ -180,6 +199,13 @@ async fn callback(
         Ok(state) => state,
         Err(_) => return Err(Madness::BadRequest("Invalid state".to_owned())),
     };
+
+    // Connecting the SRP wallet: not a login, and must not touch the admin's own tokens
+    if let Some(character_id) = crate::core::srp::parse_connect_state(&state_bytes) {
+        let redirect =
+            super::srp::finish_connect(app, account_raw.ok(), code, character_id).await;
+        return Ok(CallbackResponse::Redirect(redirect));
+    }
 
     if state_bytes != b"oauthhellostate" {
         return Err(Madness::BadRequest("Invalid state".to_owned()));
@@ -197,7 +223,11 @@ async fn callback(
         .process_authorization_code(code)
         .await?;
 
-    Ok(crate::core::auth::create_cookie(app, character_id, Some("/".to_owned())))
+    Ok(CallbackResponse::Login(crate::core::auth::create_cookie(
+        app,
+        character_id,
+        Some("/".to_owned()),
+    )))
 }
 
 pub fn routes() -> Vec<rocket::Route> {
