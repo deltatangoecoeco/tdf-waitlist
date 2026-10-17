@@ -19,6 +19,7 @@ import { useQuery } from "../../Util/query";
 import { useTranslation } from "react-i18next";
 import { UnregisteredFleetBanner } from "../../Components/UnregisteredFleetBanner";
 import { isRegisteredBoss } from "../../Util/fleet";
+import { SrpStatus } from "./SrpStatus";
 
 function coalesceCalls(func, wait) {
   var nextCall = null;
@@ -179,6 +180,9 @@ export function Waitlist() {
         {/* An FC forming a new fleet usually registers it before opening the waitlist */}
         <UnregisteredFleetBanner />
         {/* <InfoAnnouncement id={2} /> */}
+        <Buttons>
+          <SrpStatus waitlistId={waitlistId} />
+        </Buttons>
         <em>{t("notopen")}</em>
       </>
     );
@@ -246,6 +250,7 @@ export function Waitlist() {
         {!altCol && (
           <CategoryHeading name="小号 ALT" fleetComposition={fleetComposition} altCol={altCol} />
         )}
+        <SrpStatus waitlistId={waitlistId} />
       </Buttons>
 
       {displayMode === "columns" ? (
