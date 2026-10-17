@@ -422,7 +422,7 @@ const MultiboxerCards = React.memo(function MultiboxerCards({ grouping, now }) {
       {rows.length > 0 ? (
         <CardGrid role="list" aria-label="Multiboxers">
           {rows.map((row) => (
-            <PlayerCard role="listitem" key={row.key}>
+            <PlayerCard role="listitem" aria-label={row.player} key={row.key}>
               <CardHead>
                 <PlayerName>{row.player}</PlayerName>
                 <Pill heavy={row.count >= HEAVY_MULTIBOX_THRESHOLD}>

@@ -49,30 +49,30 @@ async function renderWithMembers(members) {
   return utils;
 }
 
-// The multiboxer cards, in page order
+// The multiboxer cards, in page order. Each card is labelled with its player.
 function cards() {
-  const list = screen.queryByRole("list", { name: "Multiboxers" });
-  if (!list) return [];
+  const list = screen.getByRole("list", { name: "Multiboxers" });
   return within(list)
     .getAllByRole("listitem")
     .map((card) => {
-      const countPill = within(card)
-        .getByText(/characters$/)
-        .closest("span");
+      const countPill = within(card).getByText(/characters$/);
       return {
-        player: card.firstChild.firstChild.textContent.trim(),
-        count: Number(countPill.querySelector("b").textContent),
+        player: card.getAttribute("aria-label"),
+        count: Number(countPill.textContent.match(/\d+/)[0]),
         countPill,
-        characters: card.lastChild.textContent,
+        text: card.textContent,
       };
     });
 }
 
+function expectNoMultiboxers() {
+  expect(screen.queryByRole("list", { name: "Multiboxers" })).not.toBeInTheDocument();
+  expect(screen.getByText("Nobody is flying more than one character.")).toBeInTheDocument();
+}
+
 // Opens the collapsed list of single-character pilots and returns its rows' text
-function everyoneElse() {
-  const toggle = screen.queryByRole("button", { name: /pilots on one character/ });
-  if (!toggle) return [];
-  fireEvent.click(toggle);
+function expandEveryoneElse() {
+  fireEvent.click(screen.getByRole("button", { name: /pilots on one character/ }));
   const list = screen.getByRole("list", { name: "Everyone else" });
   return within(list)
     .getAllByRole("listitem")
@@ -95,13 +95,12 @@ describe("Characters per player", () => {
       linked(3, "Charlie Pilot", 3, "Charlie Pilot", "Vargur"),
     ]);
 
-    expect(cards()).toHaveLength(0);
-    expect(screen.getByText("Nobody is flying more than one character.")).toBeInTheDocument();
+    expectNoMultiboxers();
     expect(multiboxingCount()).toBe(0);
     expect(container.textContent).toMatch(/3 characters · 3 pilots/);
     // nobody is unattributed, so it isn't mentioned at all
     expect(container.textContent).not.toMatch(/unlinked/);
-    expect(everyoneElse()).toHaveLength(3);
+    expect(expandEveryoneElse()).toHaveLength(3);
   });
 
   test("a player flying multiple characters is collapsed into one card with the right count", async () => {
@@ -117,7 +116,7 @@ describe("Characters per player", () => {
     // 4 characters in fleet, but only 2 actual humans
     expect(container.textContent).toMatch(/4 characters · 2 pilots/);
     expect(multiboxingCount()).toBe(1);
-    const rest = everyoneElse();
+    const rest = expandEveryoneElse();
     expect(rest).toHaveLength(1);
     expect(rest[0]).toMatch(/Solo Pilot/);
   });
@@ -128,10 +127,10 @@ describe("Characters per player", () => {
       linked(11, "Multi Alt A", 10, "Multi Main", "Kronos"),
     ]);
 
-    const { characters } = cards()[0];
+    const { text } = cards()[0];
     // the player's own character is shown as "main"
-    expect(characters).toMatch(/Paladin\s*main/);
-    expect(characters).toMatch(/Kronos\s*Multi Alt A/);
+    expect(text).toMatch(/Paladin\s*main/);
+    expect(text).toMatch(/Kronos\s*Multi Alt A/);
   });
 
   test("cards are sorted by character count, highest first", async () => {
@@ -146,7 +145,7 @@ describe("Characters per player", () => {
 
     expect(cards().map((c) => c.count)).toEqual([3, 2]);
     expect(cards().map((c) => c.player)).toEqual(["Three Chars", "Two Chars"]);
-    expect(everyoneElse()[0]).toMatch(/One Char/);
+    expect(expandEveryoneElse()[0]).toMatch(/One Char/);
   });
 
   test("players with an equal count are ordered by name so the list is stable", async () => {
@@ -168,14 +167,14 @@ describe("Characters per player", () => {
     ]);
 
     // 3 rows, not 2 - the two unattributed characters must not collapse together
-    expect(cards()).toHaveLength(0);
-    const rest = everyoneElse();
+    expectNoMultiboxers();
+    const rest = expandEveryoneElse();
     expect(rest).toHaveLength(3);
     expect(rest.filter((row) => /unlinked/.test(row))).toHaveLength(2);
     expect(rest.some((row) => /Ghost One/.test(row))).toBe(true);
     expect(rest.some((row) => /Ghost Two/.test(row))).toBe(true);
     // only the attributable character counts as a known pilot
-    expect(container.textContent).toMatch(/3 characters · 1 pilots · 2 unlinked/);
+    expect(container.textContent).toMatch(/3 characters · 1 pilots? · 2 unlinked/);
   });
 
   test("the multiboxing tally counts players with 2+ characters, not the characters themselves", async () => {
@@ -195,10 +194,13 @@ describe("Characters per player", () => {
   test("an empty fleet renders without crashing", async () => {
     const { container } = await renderWithMembers([]);
 
-    expect(cards()).toHaveLength(0);
+    expectNoMultiboxers();
     expect(multiboxingCount()).toBe(0);
     expect(container.textContent).toMatch(/0 characters · 0 pilots/);
-    expect(everyoneElse()).toHaveLength(0);
+    // nobody to list, so no button to expand
+    expect(
+      screen.queryByRole("button", { name: /pilots on one character/ })
+    ).not.toBeInTheDocument();
   });
 
   // In the backend, `name` and `account_id` fall out of the same match, so a null
@@ -206,7 +208,7 @@ describe("Characters per player", () => {
   test("a character with no resolved name falls back to Unknown on the unlinked path", async () => {
     await renderWithMembers([unlinked(99, null, "Paladin")]);
 
-    const rest = everyoneElse();
+    const rest = expandEveryoneElse();
     expect(rest).toHaveLength(1);
     expect(rest[0]).toMatch(/Unknown/);
     expect(rest[0]).toMatch(/unlinked/);
@@ -261,7 +263,7 @@ describe("the rest of the fleet page still renders", () => {
       linked(20, "Solo Pilot", 20, "Solo Pilot", "Vargur"),
     ]);
 
-    everyoneElse();
+    expandEveryoneElse();
     expect(screen.getAllByRole("link", { name: "Skills" })).toHaveLength(3);
   });
 });
