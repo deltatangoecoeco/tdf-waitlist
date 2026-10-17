@@ -496,7 +496,7 @@ const EveryoneElse = React.memo(function EveryoneElse({ grouping, now }) {
   );
 });
 
-function FleetMembers({refreshedAt}) {
+export function FleetMembers({refreshedAt}) {
   const authContext = React.useContext(AuthContext);
   const [fleetMembers, setFleetMembers] = React.useState(null);
   const characterId = authContext.current.id;

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { ThemeProvider } from "styled-components";
 import { MemoryRouter } from "react-router-dom";
 
@@ -45,23 +45,42 @@ async function renderWithMembers(members) {
     </ThemeProvider>
   );
   // wait for the async fetch to resolve and the section to appear
-  await screen.findByRole("heading", { name: /characters per player/i });
+  await screen.findByText(/^Multiboxers \(\d+\)$/);
   return utils;
 }
 
-function playerRows() {
-  const table = screen.getByRole("table", { name: /characters per player/i });
-  const rows = within(table).getAllByRole("row").slice(1); // drop the header row
-  return rows.map((row) => {
-    const cells = within(row).getAllByRole("cell");
-    return {
-      player: cells[0].textContent.trim(),
-      count: Number(cells[1].textContent.trim()),
-      characters: cells[2].textContent.trim(),
-      // the count is emphasised for multiboxers; assert the semantics, not the styling
-      emphasised: cells[1].querySelector("strong") !== null,
-    };
-  });
+// The multiboxer cards, in page order
+function cards() {
+  const list = screen.queryByRole("list", { name: "Multiboxers" });
+  if (!list) return [];
+  return within(list)
+    .getAllByRole("listitem")
+    .map((card) => {
+      const countPill = within(card)
+        .getByText(/characters$/)
+        .closest("span");
+      return {
+        player: card.firstChild.firstChild.textContent.trim(),
+        count: Number(countPill.querySelector("b").textContent),
+        countPill,
+        characters: card.lastChild.textContent,
+      };
+    });
+}
+
+// Opens the collapsed list of single-character pilots and returns its rows' text
+function everyoneElse() {
+  const toggle = screen.queryByRole("button", { name: /pilots on one character/ });
+  if (!toggle) return [];
+  fireEvent.click(toggle);
+  const list = screen.getByRole("list", { name: "Everyone else" });
+  return within(list)
+    .getAllByRole("listitem")
+    .map((row) => row.textContent);
+}
+
+function multiboxingCount() {
+  return Number(screen.getByText(/^Multiboxers \(\d+\)$/).textContent.match(/\d+/)[0]);
 }
 
 afterEach(() => {
@@ -69,25 +88,23 @@ afterEach(() => {
 });
 
 describe("Characters per player", () => {
-  test("a fleet of single-character pilots shows one row each, all counted as 1", async () => {
+  test("a fleet of single-character pilots has no multiboxers and lists everyone else", async () => {
     const { container } = await renderWithMembers([
       linked(1, "Alpha Pilot", 1, "Alpha Pilot", "Paladin"),
       linked(2, "Bravo Pilot", 2, "Bravo Pilot", "Nestor"),
       linked(3, "Charlie Pilot", 3, "Charlie Pilot", "Vargur"),
     ]);
 
-    const rows = playerRows();
-    expect(rows).toHaveLength(3);
-    expect(rows.every((r) => r.count === 1)).toBe(true);
-
-    expect(container.textContent).toMatch(/Pilots:\s*3\b/);
-    expect(container.textContent).toMatch(/Characters:\s*3\b/);
-    expect(container.textContent).toMatch(/Multiboxing:\s*0\b/);
-    // nobody is unattributed, so that box should be hidden entirely
-    expect(container.textContent).not.toMatch(/Unlinked:/);
+    expect(cards()).toHaveLength(0);
+    expect(screen.getByText("Nobody is flying more than one character.")).toBeInTheDocument();
+    expect(multiboxingCount()).toBe(0);
+    expect(container.textContent).toMatch(/3 characters · 3 pilots/);
+    // nobody is unattributed, so it isn't mentioned at all
+    expect(container.textContent).not.toMatch(/unlinked/);
+    expect(everyoneElse()).toHaveLength(3);
   });
 
-  test("a player flying multiple characters is collapsed into one row with the right count", async () => {
+  test("a player flying multiple characters is collapsed into one card with the right count", async () => {
     const { container } = await renderWithMembers([
       linked(10, "Multi Main", 10, "Multi Main", "Paladin"),
       linked(11, "Multi Alt A", 10, "Multi Main", "Kronos"),
@@ -95,18 +112,14 @@ describe("Characters per player", () => {
       linked(20, "Solo Pilot", 20, "Solo Pilot", "Vargur"),
     ]);
 
-    const rows = playerRows();
-    expect(rows).toHaveLength(2);
-
-    expect(rows[0].player).toBe("Multi Main");
-    expect(rows[0].count).toBe(3);
-    expect(rows[1].player).toBe("Solo Pilot");
-    expect(rows[1].count).toBe(1);
-
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]).toMatchObject({ player: "Multi Main", count: 3 });
     // 4 characters in fleet, but only 2 actual humans
-    expect(container.textContent).toMatch(/Pilots:\s*2\b/);
-    expect(container.textContent).toMatch(/Characters:\s*4\b/);
-    expect(container.textContent).toMatch(/Multiboxing:\s*1\b/);
+    expect(container.textContent).toMatch(/4 characters · 2 pilots/);
+    expect(multiboxingCount()).toBe(1);
+    const rest = everyoneElse();
+    expect(rest).toHaveLength(1);
+    expect(rest[0]).toMatch(/Solo Pilot/);
   });
 
   test("each character is listed with its ship so the FC knows what can be dropped", async () => {
@@ -115,11 +128,13 @@ describe("Characters per player", () => {
       linked(11, "Multi Alt A", 10, "Multi Main", "Kronos"),
     ]);
 
-    const rows = playerRows();
-    expect(rows[0].characters).toBe("Multi Main (Paladin), Multi Alt A (Kronos)");
+    const { characters } = cards()[0];
+    // the player's own character is shown as "main"
+    expect(characters).toMatch(/Paladin\s*main/);
+    expect(characters).toMatch(/Kronos\s*Multi Alt A/);
   });
 
-  test("rows are sorted by character count, highest first", async () => {
+  test("cards are sorted by character count, highest first", async () => {
     await renderWithMembers([
       linked(1, "One Char", 1, "One Char", "Nestor"),
       linked(30, "Three Chars", 30, "Three Chars", "Paladin"),
@@ -129,8 +144,9 @@ describe("Characters per player", () => {
       linked(21, "Two Alt A", 20, "Two Chars", "Nestor"),
     ]);
 
-    expect(playerRows().map((r) => r.count)).toEqual([3, 2, 1]);
-    expect(playerRows().map((r) => r.player)).toEqual(["Three Chars", "Two Chars", "One Char"]);
+    expect(cards().map((c) => c.count)).toEqual([3, 2]);
+    expect(cards().map((c) => c.player)).toEqual(["Three Chars", "Two Chars"]);
+    expect(everyoneElse()[0]).toMatch(/One Char/);
   });
 
   test("players with an equal count are ordered by name so the list is stable", async () => {
@@ -141,9 +157,7 @@ describe("Characters per player", () => {
       linked(11, "Alpha Alt", 10, "Alpha Player", "Vargur"),
     ]);
 
-    const rows = playerRows();
-    expect(rows.map((r) => r.count)).toEqual([2, 2]);
-    expect(rows.map((r) => r.player)).toEqual(["Alpha Player", "Zulu Player"]);
+    expect(cards().map((c) => c.player)).toEqual(["Alpha Player", "Zulu Player"]);
   });
 
   test("unlinked characters get their own row each and are never merged into one fake player", async () => {
@@ -153,20 +167,15 @@ describe("Characters per player", () => {
       unlinked(51, "Ghost Two", "Nestor"),
     ]);
 
-    const rows = playerRows();
     // 3 rows, not 2 - the two unattributed characters must not collapse together
-    expect(rows).toHaveLength(3);
-    expect(rows.every((r) => r.count === 1)).toBe(true);
-
-    const players = rows.map((r) => r.player);
-    expect(players).toContain("Ghost One (unlinked)");
-    expect(players).toContain("Ghost Two (unlinked)");
-    expect(players).toContain("Real Player");
-
+    expect(cards()).toHaveLength(0);
+    const rest = everyoneElse();
+    expect(rest).toHaveLength(3);
+    expect(rest.filter((row) => /unlinked/.test(row))).toHaveLength(2);
+    expect(rest.some((row) => /Ghost One/.test(row))).toBe(true);
+    expect(rest.some((row) => /Ghost Two/.test(row))).toBe(true);
     // only the attributable character counts as a known pilot
-    expect(container.textContent).toMatch(/Pilots:\s*1\b/);
-    expect(container.textContent).toMatch(/Characters:\s*3\b/);
-    expect(container.textContent).toMatch(/Unlinked:\s*2\b/);
+    expect(container.textContent).toMatch(/3 characters · 1 pilots · 2 unlinked/);
   });
 
   test("the multiboxing tally counts players with 2+ characters, not the characters themselves", async () => {
@@ -179,18 +188,17 @@ describe("Characters per player", () => {
     ]);
 
     // 2 multiboxers (not 4 characters, and not 3 pilots)
-    expect(container.textContent).toMatch(/Multiboxing:\s*2\b/);
-    expect(container.textContent).toMatch(/Pilots:\s*3\b/);
-    expect(container.textContent).toMatch(/Characters:\s*5\b/);
+    expect(multiboxingCount()).toBe(2);
+    expect(container.textContent).toMatch(/5 characters · 3 pilots/);
   });
 
-  test("an empty fleet renders the section without crashing", async () => {
+  test("an empty fleet renders without crashing", async () => {
     const { container } = await renderWithMembers([]);
 
-    expect(playerRows()).toHaveLength(0);
-    expect(container.textContent).toMatch(/Pilots:\s*0\b/);
-    expect(container.textContent).toMatch(/Characters:\s*0\b/);
-    expect(container.textContent).toMatch(/Multiboxing:\s*0\b/);
+    expect(cards()).toHaveLength(0);
+    expect(multiboxingCount()).toBe(0);
+    expect(container.textContent).toMatch(/0 characters · 0 pilots/);
+    expect(everyoneElse()).toHaveLength(0);
   });
 
   // In the backend, `name` and `account_id` fall out of the same match, so a null
@@ -198,71 +206,62 @@ describe("Characters per player", () => {
   test("a character with no resolved name falls back to Unknown on the unlinked path", async () => {
     await renderWithMembers([unlinked(99, null, "Paladin")]);
 
-    const rows = playerRows();
-    expect(rows).toHaveLength(1);
-    expect(rows[0].player).toBe("Unknown (unlinked)");
-    expect(rows[0].characters).toBe("Unknown (Paladin)");
+    const rest = everyoneElse();
+    expect(rest).toHaveLength(1);
+    expect(rest[0]).toMatch(/Unknown/);
+    expect(rest[0]).toMatch(/unlinked/);
   });
 
   // account_name is looked up separately from account_id, so it can be missing on a
-  // character that IS attributable. Without a fallback the Player cell renders blank,
-  // which defeats the point of the table.
+  // character that IS attributable. Without a fallback the card's title renders blank.
   test("a linked player with no resolved account name still identifies someone", async () => {
     await renderWithMembers([
       linked(10, "Visible Character", 10, null, "Paladin"),
       linked(11, "Second Character", 10, null, "Kronos"),
     ]);
 
-    const rows = playerRows();
-    expect(rows).toHaveLength(1);
-    expect(rows[0].player).toBe("Visible Character");
-    expect(rows[0].count).toBe(2);
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]).toMatchObject({ player: "Visible Character", count: 2 });
   });
 
-  test("only multiboxers get their count emphasised", async () => {
+  test("only heavy multiboxers get their count emphasised", async () => {
     await renderWithMembers([
-      linked(10, "Boxer", 10, "Boxer", "Paladin"),
-      linked(11, "Boxer Alt", 10, "Boxer", "Kronos"),
-      linked(20, "Solo", 20, "Solo", "Nestor"),
+      linked(10, "Heavy Boxer", 10, "Heavy Boxer", "Paladin"),
+      linked(11, "Heavy Alt A", 10, "Heavy Boxer", "Kronos"),
+      linked(12, "Heavy Alt B", 10, "Heavy Boxer", "Nestor"),
+      linked(20, "Light Boxer", 20, "Light Boxer", "Vargur"),
+      linked(21, "Light Alt", 20, "Light Boxer", "Paladin"),
     ]);
 
-    const rows = playerRows();
-    expect(rows[0]).toMatchObject({ player: "Boxer", count: 2, emphasised: true });
-    expect(rows[1]).toMatchObject({ player: "Solo", count: 1, emphasised: false });
+    const [heavy, light] = cards();
+    expect(heavy).toMatchObject({ player: "Heavy Boxer", count: 3 });
+    expect(light).toMatchObject({ player: "Light Boxer", count: 2 });
+    // assert the difference, not the exact styling
+    expect(heavy.countPill.className).not.toEqual(light.countPill.className);
   });
 });
 
-// Regression cover: the new section is additive, so everything that was on this
-// page before must still render alongside it.
-describe("existing fleet page content still renders", () => {
-  test("the fleet composition summary and ship breakdown are unaffected", async () => {
+describe("the rest of the fleet page still renders", () => {
+  test("the fleet composition chips count ship types", async () => {
     const { container } = await renderWithMembers([
       linked(1, "Pally Pilot", 1, "Pally Pilot", "Paladin"),
       linked(2, "Kron Pilot", 2, "Kron Pilot", "Kronos"),
       linked(3, "Logi Pilot", 3, "Logi Pilot", "Nestor"),
     ]);
 
-    // the pre-existing summary boxes
-    expect(container.textContent).toMatch(/Marauders:\s*2\b/);
-    expect(container.textContent).toMatch(/Logistics:\s*1\b/);
-    expect(container.textContent).toMatch(/Vindicators:\s*0\b/);
-
-    const shipTable = screen.getByRole("table", { name: /fleet composition/i });
-    expect(within(shipTable).getByText("Ship")).toBeInTheDocument();
-    expect(within(shipTable).getByText("Paladin")).toBeInTheDocument();
+    expect(container.textContent).toMatch(/2\s*Marauders/);
+    expect(container.textContent).toMatch(/1\s*Logistics/);
+    expect(container.textContent).toMatch(/0\s*Vindicators/);
   });
 
-  test("the members table still lists every character with its actions", async () => {
+  test("every character has a link to its skills", async () => {
     await renderWithMembers([
-      linked(1, "Pally Pilot", 1, "Pally Pilot", "Paladin"),
-      linked(2, "Kron Pilot", 2, "Kron Pilot", "Kronos"),
+      linked(10, "Multi Main", 10, "Multi Main", "Paladin"),
+      linked(11, "Multi Alt A", 10, "Multi Main", "Kronos"),
+      linked(20, "Solo Pilot", 20, "Solo Pilot", "Vargur"),
     ]);
 
-    const membersTable = screen.getByRole("table", { name: /^members$/i });
-    expect(within(membersTable).getByText("Account")).toBeInTheDocument();
-    // one header row + one row per character
-    expect(within(membersTable).getAllByRole("row")).toHaveLength(3);
-    expect(within(membersTable).getAllByText("Skills")).toHaveLength(2);
-    expect(within(membersTable).getAllByText("Information")).toHaveLength(2);
+    everyoneElse();
+    expect(screen.getAllByRole("link", { name: "Skills" })).toHaveLength(3);
   });
 });
